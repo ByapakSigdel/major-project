@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D Hand Simulation</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <!-- Three.js canvas -->
+    <div id="canvas-container"></div>
+
+    <!-- Loading screen -->
+    <div id="loading-screen">
+      <div class="loader-content">
+        <div class="spinner"></div>
+        <p>Loading hand model...</p>
+      </div>
+    </div>
+
+    <!-- UI overlay -->
+    <div id="ui-overlay">
+
+      <!-- ====== Top bar: Mode tabs + Ctrl indicator ====== -->
+      <div id="top-bar">
+        <div id="mode-tabs">
+          <button class="mode-tab active" data-mode="simulation">
+            <span class="tab-icon">&#9995;</span> Simulation
+          </button>
+          <button class="mode-tab" data-mode="gesture">
+            <span class="tab-icon">&#9996;</span> Gestures
+          </button>
+        </div>
+        <div id="ctrl-indicator" class="hidden">
+          <span class="ctrl-key">Ctrl</span>
+          <span class="ctrl-label">Mouse Mode Active</span>
+        </div>
+        <div id="mode-hint">
+          Hold <kbd>Ctrl</kbd> for mouse mode
+        </div>
+        <a href="/game/" id="game-link">
+          <span class="tab-icon">&#127922;</span> Escape Room Game
+        </a>
+      </div>
+
+      <!-- ====== Left panel: Controls (mode-dependent) ====== -->
+      <div id="control-panel">
+        <h2>Hand Simulation</h2>
+
+        <!-- Simulation mode controls -->
+        <div id="sim-controls" class="mode-section">
+          <div class="control-group">
+            <label>Simulation</label>
+            <button id="btn-toggle" class="btn btn-primary">Start</button>
+          </div>
+
+          <div class="control-group">
+            <label>Motion Mode</label>
+            <select id="select-mode">
+              <option value="fist">Open / Close Fist</option>
+              <option value="wave">Wave</option>
+              <option value="individual">Individual Fingers</option>
+              <option value="random">Random Natural</option>
+              <option value="peace">Peace Sign</option>
+              <option value="counting">Counting</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label>Update Rate: <span id="rate-value">30</span> Hz</label>
+            <input type="range" id="slider-rate" min="10" max="60" value="30" />
+          </div>
+
+          <div class="control-group">
+            <label>Animation Speed: <span id="speed-value">1.0</span>x</label>
+            <input type="range" id="slider-speed" min="0.1" max="3.0" step="0.1" value="1.0" />
+          </div>
+        </div>
+
+        <!-- Gesture mode controls -->
+        <div id="gesture-controls" class="mode-section hidden">
+          <div class="control-group">
+            <label>Recognition</label>
+            <button id="btn-toggle-gesture" class="btn btn-primary">Start</button>
+          </div>
+
+          <div class="control-group">
+            <label>Motion for Testing</label>
+            <select id="select-gesture-motion">
+              <option value="random">Random</option>
+              <option value="fist">Fist</option>
+              <option value="peace">Peace Sign</option>
+              <option value="individual">Individual Fingers</option>
+              <option value="counting">Counting</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label>ML Training Data</label>
+            <div class="btn-row">
+              <button id="btn-log-toggle" class="btn btn-small">Record</button>
+              <button id="btn-log-export" class="btn btn-small">Export</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Common -->
+        <div class="control-group source-info">
+          <label>Data Source</label>
+          <span id="source-label" class="badge">Synthetic</span>
+        </div>
+      </div>
+
+      <!-- ====== Right panel: Debug info ====== -->
+      <div id="debug-panel">
+        <h3>Sensor Data <span class="live-dot"></span></h3>
+
+        <div class="debug-section">
+          <h4>Finger Bend (0.0 - 1.0)</h4>
+          <div class="sensor-row">
+            <span class="sensor-label">Thumb</span>
+            <div class="sensor-bar"><div id="bar-thumb" class="sensor-fill"></div></div>
+            <span id="val-thumb" class="sensor-value">0.00</span>
+          </div>
+          <div class="sensor-row">
+            <span class="sensor-label">Index</span>
+            <div class="sensor-bar"><div id="bar-index" class="sensor-fill"></div></div>
+            <span id="val-index" class="sensor-value">0.00</span>
+          </div>
+          <div class="sensor-row">
+            <span class="sensor-label">Middle</span>
+            <div class="sensor-bar"><div id="bar-middle" class="sensor-fill"></div></div>
+            <span id="val-middle" class="sensor-value">0.00</span>
+          </div>
+          <div class="sensor-row">
+            <span class="sensor-label">Ring</span>
+            <div class="sensor-bar"><div id="bar-ring" class="sensor-fill"></div></div>
+            <span id="val-ring" class="sensor-value">0.00</span>
+          </div>
+          <div class="sensor-row">
+            <span class="sensor-label">Pinky</span>
+            <div class="sensor-bar"><div id="bar-pinky" class="sensor-fill"></div></div>
+            <span id="val-pinky" class="sensor-value">0.00</span>
+          </div>
+        </div>
+
+        <div class="debug-section">
+          <h4>Wrist Orientation (degrees)</h4>
+          <div class="sensor-row">
+            <span class="sensor-label">Roll</span>
+            <span id="val-roll" class="sensor-value orientation">0.0</span>
+          </div>
+          <div class="sensor-row">
+            <span class="sensor-label">Pitch</span>
+            <span id="val-pitch" class="sensor-value orientation">0.0</span>
+          </div>
+          <div class="sensor-row">
+            <span class="sensor-label">Yaw</span>
+            <span id="val-yaw" class="sensor-value orientation">0.0</span>
+          </div>
+        </div>
+
+        <div class="debug-section">
+          <span class="fps-label">FPS: <span id="val-fps">0</span></span>
+        </div>
+      </div>
+
+      <!-- ====== Gesture display (bottom center, gesture mode only) ====== -->
+      <div id="gesture-display" class="hidden">
+        <div id="gesture-emoji">-</div>
+        <div id="gesture-name">No gesture detected</div>
+        <div id="gesture-confidence">
+          <div class="confidence-bar">
+            <div id="confidence-fill" class="confidence-fill"></div>
+          </div>
+          <span id="confidence-value">0%</span>
+        </div>
+        <div id="gesture-grid">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <!-- ====== Mouse mode overlay ====== -->
+      <div id="mouse-cursor" class="hidden">
+        <svg width="24" height="24" viewBox="0 0 24 24">
+          <path d="M4 2 L4 20 L9 15 L14 22 L17 20 L12 13 L19 13 Z"
+                fill="#4060ff" stroke="white" stroke-width="1.5"/>
+        </svg>
+      </div>
+      <div id="click-indicator"></div>
+      <div id="mouse-status" class="hidden">
+        <div class="mouse-status-inner">
+          <span id="mouse-fist-status" class="fist-open">OPEN</span>
+          <span class="mouse-pos">
+            X: <span id="mouse-x">0</span>
+            Y: <span id="mouse-y">0</span>
+          </span>
+        </div>
+      </div>
+
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

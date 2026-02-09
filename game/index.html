@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Escape Room - Hand Controlled</title>
+  </head>
+  <body>
+    <div id="game-container"></div>
+
+    <!-- Loading screen -->
+    <div id="loading-screen">
+      <div class="loader-content">
+        <div class="spinner"></div>
+        <p>Loading Escape Room...</p>
+      </div>
+    </div>
+
+    <!-- Game HUD -->
+    <div id="game-hud">
+      <!-- Room indicator -->
+      <div id="room-indicator">
+        <div class="room-dot active" data-room="0"></div>
+        <div class="room-connector"></div>
+        <div class="room-dot" data-room="1"></div>
+        <div class="room-connector"></div>
+        <div class="room-dot" data-room="2"></div>
+        <div class="room-connector"></div>
+        <div class="room-dot exit-dot" data-room="3"></div>
+      </div>
+
+      <!-- Crosshair / hand cursor -->
+      <div id="hand-cursor">
+        <svg width="48" height="48" viewBox="0 0 48 48">
+          <circle cx="24" cy="24" r="18" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+          <circle cx="24" cy="24" r="4" fill="rgba(255,255,255,0.6)"/>
+        </svg>
+      </div>
+
+      <!-- Grab indicator -->
+      <div id="grab-indicator" class="hidden">
+        <span class="grab-icon">&#9994;</span>
+        <span class="grab-text">Grabbing</span>
+      </div>
+
+      <!-- Interaction prompt -->
+      <div id="interact-prompt" class="hidden">
+        <span class="prompt-key">Close fist</span>
+        <span class="prompt-text">to grab</span>
+      </div>
+
+      <!-- Inventory bar -->
+      <div id="inventory">
+        <h4>Inventory</h4>
+        <div id="inventory-slots"></div>
+      </div>
+
+      <!-- Message display -->
+      <div id="game-message" class="hidden">
+        <p id="message-text"></p>
+      </div>
+
+      <!-- Clue display -->
+      <div id="clue-display" class="hidden">
+        <div class="clue-content">
+          <h3 id="clue-title">Clue Found!</h3>
+          <p id="clue-text"></p>
+          <button id="clue-dismiss" class="btn">Got it</button>
+        </div>
+      </div>
+
+      <!-- Room transition overlay -->
+      <div id="room-transition" class="hidden">
+        <div class="transition-text">
+          <h2 id="transition-title">Room 2</h2>
+          <p id="transition-subtitle">The mystery deepens...</p>
+        </div>
+      </div>
+
+      <!-- Win screen -->
+      <div id="win-screen" class="hidden">
+        <div class="win-content">
+          <h1>ESCAPED!</h1>
+          <p>You solved all the puzzles and escaped the rooms!</p>
+          <div class="win-stats">
+            <span>Time: <span id="win-time">0:00</span></span>
+          </div>
+          <button id="btn-play-again" class="btn btn-large">Play Again</button>
+          <a href="/" class="btn btn-link">Back to Hand Simulation</a>
+        </div>
+      </div>
+
+      <!-- Debug panel (sensor data) -->
+      <div id="debug-panel-game">
+        <h4>Hand Data <span class="live-dot"></span></h4>
+        <div class="sensor-row-mini">
+          <span>Thumb</span><span id="g-val-thumb">0.00</span>
+        </div>
+        <div class="sensor-row-mini">
+          <span>Index</span><span id="g-val-index">0.00</span>
+        </div>
+        <div class="sensor-row-mini">
+          <span>Middle</span><span id="g-val-middle">0.00</span>
+        </div>
+        <div class="sensor-row-mini">
+          <span>Ring</span><span id="g-val-ring">0.00</span>
+        </div>
+        <div class="sensor-row-mini">
+          <span>Pinky</span><span id="g-val-pinky">0.00</span>
+        </div>
+        <div class="sensor-row-mini orientation">
+          <span>Roll</span><span id="g-val-roll">0.0</span>
+        </div>
+        <div class="sensor-row-mini orientation">
+          <span>Pitch</span><span id="g-val-pitch">0.0</span>
+        </div>
+        <div class="sensor-row-mini orientation">
+          <span>Yaw</span><span id="g-val-yaw">0.0</span>
+        </div>
+        <div class="sensor-row-mini">
+          <span>FPS</span><span id="g-val-fps">0</span>
+        </div>
+      </div>
+
+      <!-- Back button -->
+      <a href="/" id="back-btn" title="Back to Hand Simulation">&larr; Back</a>
+    </div>
+
+    <script type="module" src="/src/game/main.js"></script>
+  </body>
+</html>
