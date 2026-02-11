@@ -3,12 +3,17 @@
  * 
  * Unlike the hand simulation SceneManager, this one:
  *   - Uses a first-person camera (no orbit controls)
- *   - Camera direction is controlled by hand IMU (wrist orientation)
+ *   - Mouse look via pointer lock for camera rotation
+ *   - WASD movement relative to camera direction
  *   - Supports raycasting for object interaction
  *   - Manages room-specific scenes
  */
 
 import * as THREE from 'three';
+
+const MOVE_SPEED = 3.0;    // units per second
+const MOUSE_SENS = 0.002;  // radians per pixel
+const PITCH_LIMIT = 80 * (Math.PI / 180); // ±80 degrees
 
 export class GameSceneManager {
   constructor(container) {
@@ -18,9 +23,21 @@ export class GameSceneManager {
     this._lastFpsTime = performance.now();
     this._fps = 0;
 
+    // Camera Euler state (yaw = Y rotation, pitch = X rotation)
+    this._yaw = 0;
+    this._pitch = 0;
+
+    // Movement key state
+    this._keys = { w: false, a: false, s: false, d: false };
+
+    // Reusable vectors for movement
+    this._moveForward = new THREE.Vector3();
+    this._moveRight = new THREE.Vector3();
+
     this._initScene();
     this._initLights();
     this._initResize();
+    this._initControls();
 
     // Raycaster for object picking
     this._raycaster = new THREE.Raycaster();
@@ -104,22 +121,62 @@ export class GameSceneManager {
     this._interactables = [];
   }
 
-  // ---- Camera Control ----
+  // ---- Camera / Movement Control ----
 
-  /** Update camera rotation from hand orientation data */
-  updateCameraFromOrientation(orientation) {
-    if (!orientation) return;
-    const { pitch, yaw } = orientation;
+  /** Initialize pointer lock + keyboard listeners */
+  _initControls() {
+    const canvas = this._renderer.domElement;
 
-    // Map IMU pitch/yaw to camera look direction
-    // Yaw = look left/right, Pitch = look up/down
-    const yawRad = THREE.MathUtils.degToRad(yaw * 2.5);
-    const pitchRad = THREE.MathUtils.degToRad(pitch * 2.0);
+    // Click to lock pointer
+    canvas.addEventListener('click', () => {
+      canvas.requestPointerLock();
+    });
 
-    // Base camera look-forward, modified by orientation
-    this._camera.rotation.set(0, 0, 0);
-    this._camera.rotateY(-yawRad);
-    this._camera.rotateX(pitchRad);
+    // Mouse look
+    document.addEventListener('mousemove', (e) => {
+      if (document.pointerLockElement !== canvas) return;
+      this._yaw   -= e.movementX * MOUSE_SENS;
+      this._pitch -= e.movementY * MOUSE_SENS;
+      this._pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this._pitch));
+    });
+
+    // WASD
+    const onKey = (e, down) => {
+      const key = e.key.toLowerCase();
+      if (key in this._keys) this._keys[key] = down;
+    };
+    document.addEventListener('keydown', (e) => onKey(e, true));
+    document.addEventListener('keyup',   (e) => onKey(e, false));
+  }
+
+  /**
+   * Call once per frame (from render loop) to apply mouse look rotation
+   * and WASD movement to the camera.
+   */
+  moveCamera(dt) {
+    // Apply look rotation (order: Y then X, no roll)
+    this._camera.rotation.set(0, 0, 0, 'YXZ');
+    this._camera.rotation.order = 'YXZ';
+    this._camera.rotation.y = this._yaw;
+    this._camera.rotation.x = this._pitch;
+
+    // WASD movement relative to camera direction (Y locked — no flying)
+    const { w, a, s, d } = this._keys;
+    if (!(w || a || s || d)) return;
+
+    // Forward/back along camera's horizontal look direction
+    this._camera.getWorldDirection(this._moveForward);
+    this._moveForward.y = 0;
+    this._moveForward.normalize();
+
+    // Right = forward × world up
+    this._moveRight.crossVectors(this._moveForward, this._camera.up).normalize();
+
+    const speed = MOVE_SPEED * dt;
+    if (w) this._camera.position.addScaledVector(this._moveForward,  speed);
+    if (s) this._camera.position.addScaledVector(this._moveForward, -speed);
+    if (d) this._camera.position.addScaledVector(this._moveRight,    speed);
+    if (a) this._camera.position.addScaledVector(this._moveRight,   -speed);
   }
 
   // ---- Init ----

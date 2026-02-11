@@ -26,7 +26,7 @@
 
 import './style.css';
 import { SceneManager } from './rendering/SceneManager.js';
-import { createHandModel } from './rendering/HandModel.js';
+import { createHandModelAsync } from './rendering/HandModel.js';
 import { SyntheticDataGenerator } from './data/SyntheticDataGenerator.js';
 import { HandAnimator } from './animation/HandAnimator.js';
 import { ModeManager, MODES } from './modes/ModeManager.js';
@@ -36,13 +36,16 @@ import { UIController } from './ui/UIController.js';
 
 // ---- Initialize ----
 
-function init() {
+async function init() {
   // 1. Set up the 3D scene
   const container = document.getElementById('canvas-container');
   const sceneManager = new SceneManager(container);
 
   // 2. Create and add the hand model
-  const { group, skeleton, bones, mesh } = createHandModel();
+  // Try to load the GLTF model first, fallback to procedural is handled inside
+  const modelData = await createHandModelAsync('/models/human_hand_base_mesh.glb');
+  const { group, skeleton, bones, mesh } = modelData;
+  
   sceneManager.scene.add(group);
 
   // 3. Create the data source (synthetic for now)
@@ -147,11 +150,21 @@ function init() {
       sceneManager, dataSource, animator, bones, skeleton,
       modeManager, gestureEngine, mouseController,
     };
+    
+    // Press 'D' to toggle bone debug axes (Red=X, Green=Y, Blue=Z)
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'd' || e.key === 'D') {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+        animator.toggleDebugAxes();
+      }
+    });
+
     console.log(
       '%c3D Hand Simulation loaded (all modes active)',
       'color: #6080ff; font-weight: bold;',
       '\nAccess internals via window.__hand',
-      '\nModes: simulation | gesture | mouse (Ctrl)'
+      '\nModes: simulation | gesture | mouse (Ctrl)',
+      '\nPress D to toggle bone axis debug'
     );
   }
 }

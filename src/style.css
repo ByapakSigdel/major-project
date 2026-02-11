@@ -11,7 +11,7 @@
 
 body {
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  background: #0a0a0f;
+  background: #141422;
   color: #e0e0e0;
   overflow: hidden;
   width: 100vw;
@@ -35,7 +35,7 @@ canvas { display: block; }
   position: fixed;
   inset: 0;
   z-index: 100;
-  background: #0a0a1a;
+  background: #141428;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -112,8 +112,8 @@ canvas { display: block; }
   justify-content: center;
   gap: 16px;
   pointer-events: auto;
-  background: rgba(10, 10, 20, 0.85);
-  border-bottom: 1px solid rgba(100, 120, 255, 0.15);
+  background: rgba(18, 18, 32, 0.88);
+  border-bottom: 1px solid rgba(100, 120, 255, 0.2);
   backdrop-filter: blur(8px);
   padding: 0 20px;
 }
@@ -121,7 +121,7 @@ canvas { display: block; }
 #mode-tabs {
   display: flex;
   gap: 4px;
-  background: rgba(20, 20, 40, 0.8);
+  background: rgba(20, 20, 40, 0.6);
   border-radius: 8px;
   padding: 3px;
 }
@@ -213,8 +213,8 @@ canvas { display: block; }
   top: 68px;
   left: 20px;
   width: 260px;
-  background: rgba(15, 15, 25, 0.92);
-  border: 1px solid rgba(100, 120, 255, 0.2);
+  background: rgba(22, 22, 38, 0.90);
+  border: 1px solid rgba(100, 120, 255, 0.25);
   border-radius: 12px;
   padding: 20px;
   pointer-events: auto;
@@ -224,7 +224,7 @@ canvas { display: block; }
 #control-panel h2 {
   font-size: 16px;
   font-weight: 600;
-  color: #a0b0ff;
+  color: #b0c0ff;
   margin-bottom: 16px;
   letter-spacing: 0.5px;
 }
@@ -359,8 +359,8 @@ input[type="range"]::-webkit-slider-thumb {
   top: 68px;
   right: 20px;
   width: 280px;
-  background: rgba(15, 15, 25, 0.92);
-  border: 1px solid rgba(100, 120, 255, 0.2);
+  background: rgba(22, 22, 38, 0.90);
+  border: 1px solid rgba(100, 120, 255, 0.25);
   border-radius: 12px;
   padding: 18px;
   pointer-events: auto;
@@ -370,7 +370,7 @@ input[type="range"]::-webkit-slider-thumb {
 #debug-panel h3 {
   font-size: 14px;
   font-weight: 600;
-  color: #a0b0ff;
+  color: #b0c0ff;
   margin-bottom: 14px;
   display: flex;
   align-items: center;
@@ -474,8 +474,8 @@ input[type="range"]::-webkit-slider-thumb {
   transform: translateX(-50%);
   text-align: center;
   pointer-events: auto;
-  background: rgba(15, 15, 25, 0.92);
-  border: 1px solid rgba(100, 120, 255, 0.2);
+  background: rgba(22, 22, 38, 0.90);
+  border: 1px solid rgba(100, 120, 255, 0.25);
   border-radius: 16px;
   padding: 20px 30px;
   backdrop-filter: blur(10px);
@@ -615,7 +615,7 @@ input[type="range"]::-webkit-slider-thumb {
   display: flex;
   align-items: center;
   gap: 16px;
-  background: rgba(15, 15, 25, 0.92);
+  background: rgba(22, 22, 38, 0.90);
   border: 1px solid rgba(255, 64, 96, 0.3);
   border-radius: 10px;
   padding: 10px 20px;

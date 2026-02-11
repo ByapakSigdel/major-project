@@ -60,7 +60,7 @@ export class SceneManager {
   _initScene() {
     // Scene
     this._scene = new THREE.Scene();
-    this._scene.background = new THREE.Color(0x0a0a1a);
+    this._scene.background = new THREE.Color(0x161630);
 
     // Subtle fog for depth
     this._scene.fog = new THREE.FogExp2(0x0a0a1a, 0.15);

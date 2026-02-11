@@ -22,10 +22,181 @@ export const FINGER_NAMES = ['thumb', 'index', 'middle', 'ring', 'pinky'];
 // ============================================================
 
 /**
+ * WebXR hand bone chain definitions.
+ * Defines the proper parent→child hierarchy for each finger.
+ * WebXR Generic Hand models store all bones FLAT under the Armature,
+ * so we must re-parent them into chains for proper animation.
+ */
+const FINGER_CHAINS = {
+  thumb:  ['thumb-metacarpal', 'thumb-phalanx-proximal', 'thumb-phalanx-distal', 'thumb-tip'],
+  index:  ['index-finger-metacarpal', 'index-finger-phalanx-proximal', 'index-finger-phalanx-intermediate', 'index-finger-phalanx-distal', 'index-finger-tip'],
+  middle: ['middle-finger-metacarpal', 'middle-finger-phalanx-proximal', 'middle-finger-phalanx-intermediate', 'middle-finger-phalanx-distal', 'middle-finger-tip'],
+  ring:   ['ring-finger-metacarpal', 'ring-finger-phalanx-proximal', 'ring-finger-phalanx-intermediate', 'ring-finger-phalanx-distal', 'ring-finger-tip'],
+  pinky:  ['pinky-finger-metacarpal', 'pinky-finger-phalanx-proximal', 'pinky-finger-phalanx-intermediate', 'pinky-finger-phalanx-distal', 'pinky-finger-tip'],
+};
+
+/**
+ * Maps WebXR bone names to our standard naming convention.
+ * Our convention: {finger}_{joint} where joint is mcp, pip, dip, tip
+ * 
+ * ANATOMY:
+ *   MCP joint = knuckle (between metacarpal and proximal phalanx)
+ *     → The PROXIMAL PHALANX bone rotates at this joint
+ *   PIP joint = middle joint (between proximal and intermediate phalanx)
+ *     → The INTERMEDIATE PHALANX bone rotates at this joint
+ *   DIP joint = fingertip joint (between intermediate and distal phalanx)
+ *     → The DISTAL PHALANX bone rotates at this joint
+ * 
+ *   The metacarpal bone barely moves in real hands and is NOT driven.
+ * 
+ * WebXR naming → our mapping:
+ *   - Non-thumb fingers (4 bones + tip):
+ *     metacarpal → meta (driven with small flexion for smooth deformation)
+ *     phalanx-proximal → mcp (proximal bone rotates at MCP joint)
+ *     phalanx-intermediate → pip (intermediate bone rotates at PIP joint)
+ *     phalanx-distal → dip (distal bone rotates at DIP joint)
+ *     tip → tip (end effector)
+ * 
+ *   - Thumb (3 bones + tip):
+ *     metacarpal → mcp (thumb metacarpal is mobile, unlike fingers)
+ *     phalanx-proximal → pip (proximal phalanx)
+ *     phalanx-distal → dip (distal phalanx)
+ *     tip → tip (end effector)
+ */
+const WEBXR_TO_STD = {
+  'wrist':                              'wrist',
+  // Thumb: metacarpal IS mobile (unique to thumb anatomy)
+  'thumb-metacarpal':                   'thumb_mcp',
+  'thumb-phalanx-proximal':             'thumb_pip',
+  'thumb-phalanx-distal':               'thumb_dip',
+  'thumb-tip':                          'thumb_tip',
+  // Index: metacarpal gets small flexion for smooth joint deformation
+  'index-finger-metacarpal':            'index_meta',
+  'index-finger-phalanx-proximal':      'index_mcp',
+  'index-finger-phalanx-intermediate':  'index_pip',
+  'index-finger-phalanx-distal':        'index_dip',
+  'index-finger-tip':                   'index_tip',
+  // Middle
+  'middle-finger-metacarpal':           'middle_meta',
+  'middle-finger-phalanx-proximal':     'middle_mcp',
+  'middle-finger-phalanx-intermediate': 'middle_pip',
+  'middle-finger-phalanx-distal':       'middle_dip',
+  'middle-finger-tip':                  'middle_tip',
+  // Ring
+  'ring-finger-metacarpal':             'ring_meta',
+  'ring-finger-phalanx-proximal':       'ring_mcp',
+  'ring-finger-phalanx-intermediate':   'ring_pip',
+  'ring-finger-phalanx-distal':         'ring_dip',
+  'ring-finger-tip':                    'ring_tip',
+  // Pinky
+  'pinky-finger-metacarpal':            'pinky_meta',
+  'pinky-finger-phalanx-proximal':      'pinky_mcp',
+  'pinky-finger-phalanx-intermediate':  'pinky_pip',
+  'pinky-finger-phalanx-distal':        'pinky_dip',
+  'pinky-finger-tip':                   'pinky_tip',
+};
+
+/**
+ * Re-parent bones from a flat structure into proper parent→child chains.
+ * 
+ * WebXR Generic Hand models store all bones as siblings under an Armature.
+ * Each bone has ABSOLUTE (world-space) position and quaternion.
+ * We need to convert them to LOCAL transforms relative to their new parent.
+ * 
+ * Steps:
+ * 1. Save each bone's world-space position and quaternion
+ * 2. Detach from old parent (Armature)
+ * 3. Attach to new parent (previous bone in chain)
+ * 4. Compute local position and quaternion relative to new parent
+ * 
+ * @param {THREE.Bone[]} bones - All skeleton bones
+ * @param {string} wristName - Name of the wrist bone
+ */
+function reparentBones(bones, wristName = 'wrist') {
+  // Build name → bone lookup
+  const byName = {};
+  for (const bone of bones) {
+    byName[bone.name] = bone;
+  }
+
+  const wristBone = byName[wristName];
+  if (!wristBone) {
+    console.warn('No wrist bone found for re-parenting');
+    return;
+  }
+
+  // Save world transforms BEFORE any re-parenting
+  const worldTransforms = {};
+  for (const bone of bones) {
+    bone.updateWorldMatrix(true, false);
+    worldTransforms[bone.name] = {
+      pos: new THREE.Vector3(),
+      quat: new THREE.Quaternion(),
+      scale: new THREE.Vector3(),
+    };
+    bone.matrixWorld.decompose(
+      worldTransforms[bone.name].pos,
+      worldTransforms[bone.name].quat,
+      worldTransforms[bone.name].scale
+    );
+  }
+
+  // Re-parent each finger chain: wrist → metacarpal → proximal → ... → tip
+  for (const [finger, chain] of Object.entries(FINGER_CHAINS)) {
+    let parent = wristBone;
+
+    for (const boneName of chain) {
+      const bone = byName[boneName];
+      if (!bone) {
+        console.warn(`Missing bone: ${boneName}`);
+        continue;
+      }
+
+      // Detach from old parent and attach to new parent
+      if (bone.parent) {
+        bone.parent.remove(bone);
+      }
+      parent.add(bone);
+
+      parent = bone;
+    }
+  }
+
+  // Now recompute LOCAL transforms from world transforms.
+  // For each bone, localQuat = parentWorldQuat^-1 * worldQuat
+  // and localPos = parentWorldQuat^-1 * (worldPos - parentWorldPos)
+  const parentInvQuat = new THREE.Quaternion();
+  const deltaPos = new THREE.Vector3();
+
+  for (const bone of bones) {
+    const world = worldTransforms[bone.name];
+    if (!world) continue;
+
+    if (bone.parent && bone.parent.isBone && worldTransforms[bone.parent.name]) {
+      const parentWorld = worldTransforms[bone.parent.name];
+
+      // Local quaternion = inverse(parentWorldQuat) * worldQuat
+      parentInvQuat.copy(parentWorld.quat).invert();
+      bone.quaternion.copy(parentInvQuat).multiply(world.quat);
+
+      // Local position = inverse(parentWorldQuat) * (worldPos - parentWorldPos)
+      // Also need to account for parent scale
+      deltaPos.copy(world.pos).sub(parentWorld.pos);
+      deltaPos.applyQuaternion(parentInvQuat);
+      // Divide by parent scale
+      deltaPos.divide(parentWorld.scale);
+      bone.position.copy(deltaPos);
+    }
+    // Wrist and other root-level bones keep their original transforms
+  }
+
+  console.log('Bones re-parented into hierarchical chains');
+}
+
+/**
  * Attempt to load a GLTF/GLB hand model.
- * The model's skeleton bones should contain names like:
- *   Hand, Thumb1, Thumb2, Thumb3, Index1, etc.
- * We map them to our standard naming.
+ * Handles both WebXR Generic Hand format (flat bones) and traditional
+ * hierarchical rigs. Builds a standard bone map for the animator.
  * 
  * @param {string} url - Path to .glb or .gltf file
  * @returns {Promise<{group, skeleton, bones, mesh}|null>}
@@ -50,66 +221,114 @@ export async function loadGLTFHand(url) {
       return null;
     }
     
-    // Build bone map by searching for common naming patterns
-    const boneMap = {};
     const skeleton = skinnedMesh.skeleton;
     
-    // Common bone name mappings (various rigging conventions)
-    const namePatterns = {
-      wrist:      [/wrist|hand|armature/i],
-      palm:       [/palm|hand_?r?|metacarpal/i],
-      thumb_mcp:  [/thumb.?(1|meta|mcp|proximal)/i],
-      thumb_pip:  [/thumb.?(2|pip|intermediate|medial)/i],
-      thumb_dip:  [/thumb.?(3|dip|distal)/i],
-      thumb_tip:  [/thumb.?(4|tip|end)/i],
-      index_mcp:  [/index.?(1|meta|mcp|proximal)/i],
-      index_pip:  [/index.?(2|pip|intermediate|medial)/i],
-      index_dip:  [/index.?(3|dip|distal)/i],
-      index_tip:  [/index.?(4|tip|end)/i],
-      middle_mcp: [/middle.?(1|meta|mcp|proximal)/i],
-      middle_pip: [/middle.?(2|pip|intermediate|medial)/i],
-      middle_dip: [/middle.?(3|dip|distal)/i],
-      middle_tip: [/middle.?(4|tip|end)/i],
-      ring_mcp:   [/ring.?(1|meta|mcp|proximal)/i],
-      ring_pip:   [/ring.?(2|pip|intermediate|medial)/i],
-      ring_dip:   [/ring.?(3|dip|distal)/i],
-      ring_tip:   [/ring.?(4|tip|end)/i],
-      pinky_mcp:  [/(pinky|little).?(1|meta|mcp|proximal)/i],
-      pinky_pip:  [/(pinky|little).?(2|pip|intermediate|medial)/i],
-      pinky_dip:  [/(pinky|little).?(3|dip|distal)/i],
-      pinky_tip:  [/(pinky|little).?(4|tip|end)/i],
-    };
+    // Detect if this is a WebXR-style flat bone model
+    // (all bones are siblings under a common parent, not hierarchical)
+    const isFlat = skeleton.bones.length > 0 && skeleton.bones.every(
+      b => b.parent === skeleton.bones[0].parent
+    );
+    
+    if (isFlat) {
+      console.log('Detected flat WebXR bone structure, re-parenting into chains...');
+      reparentBones(skeleton.bones);
+    }
+    
+    // Build bone map using WebXR naming convention
+    const boneMap = {};
     
     for (const bone of skeleton.bones) {
-      for (const [stdName, patterns] of Object.entries(namePatterns)) {
-        if (boneMap[stdName]) continue;
-        for (const pat of patterns) {
-          if (pat.test(bone.name)) {
-            boneMap[stdName] = bone;
-            break;
-          }
+      // Try direct WebXR name mapping first
+      const stdName = WEBXR_TO_STD[bone.name];
+      if (stdName && !boneMap[stdName]) {
+        boneMap[stdName] = bone;
+        continue;
+      }
+      
+      // Fallback: try regex patterns for other naming conventions
+      const fallbackPatterns = {
+        wrist:       /^(wrist|hand)$/i,
+        thumb_mcp:   /thumb.*(meta|mcp|1$)/i,
+        thumb_pip:   /thumb.*(proximal|pip|2$)/i,
+        thumb_dip:   /thumb.*(distal|dip|3$)/i,
+        thumb_tip:   /thumb.*(tip|end|4$)/i,
+        index_meta:  /index.*meta/i,
+        index_mcp:   /index.*(proximal|mcp|1$)/i,
+        index_pip:   /index.*(intermediate|pip|2$)/i,
+        index_dip:   /index.*(distal|dip|3$)/i,
+        index_tip:   /index.*(tip|end|4$)/i,
+        middle_meta: /middle.*meta/i,
+        middle_mcp:  /middle.*(proximal|mcp|1$)/i,
+        middle_pip:  /middle.*(intermediate|pip|2$)/i,
+        middle_dip:  /middle.*(distal|dip|3$)/i,
+        middle_tip:  /middle.*(tip|end|4$)/i,
+        ring_meta:   /ring.*meta/i,
+        ring_mcp:    /ring.*(proximal|mcp|1$)/i,
+        ring_pip:    /ring.*(intermediate|pip|2$)/i,
+        ring_dip:    /ring.*(distal|dip|3$)/i,
+        ring_tip:    /ring.*(tip|end|4$)/i,
+        pinky_meta:  /(pinky|little).*meta/i,
+        pinky_mcp:   /(pinky|little).*(proximal|mcp|1$)/i,
+        pinky_pip:   /(pinky|little).*(intermediate|pip|2$)/i,
+        pinky_dip:   /(pinky|little).*(distal|dip|3$)/i,
+        pinky_tip:   /(pinky|little).*(tip|end|4$)/i,
+      };
+      
+      for (const [name, pat] of Object.entries(fallbackPatterns)) {
+        if (!boneMap[name] && pat.test(bone.name)) {
+          boneMap[name] = bone;
+          break;
         }
       }
     }
     
     // If we found at least the wrist and some fingers, use it
     const foundBones = Object.keys(boneMap).length;
+    console.log(`Mapped ${foundBones} bones:`, Object.keys(boneMap).join(', '));
     if (foundBones < 10) {
       console.warn(`Only found ${foundBones} bones in GLTF, need at least 10. Falling back.`);
       return null;
     }
     
-    // Enable shadows
+    // Enable shadows and apply skin material
     scene.traverse((child) => {
       if (child.isMesh) {
         child.castShadow = true;
         child.receiveShadow = true;
+        if (child.material) {
+           child.material = createSkinMaterial();
+        }
       }
     });
     
-    scene.rotation.x = -Math.PI / 8;
+    // WebXR models are in meters (~0.1m hand width).
+    // Scale up to match our scene units (~1.0 unit hand width).
+    //
+    // IMPORTANT: We must NOT apply rotation/scale directly to the gltf scene
+    // because it contains both the SkinnedMesh and the skeleton bones as siblings.
+    // In Three.js "attached" bind mode, the vertex shader applies both the mesh's
+    // world matrix AND the bone's world matrix. If both include the scene rotation,
+    // the rotation gets applied TWICE (double-transform bug).
+    //
+    // Fix: wrap the gltf scene in a parent Group and apply transforms there.
+    // This way the gltf scene's own matrix stays identity, so the mesh world
+    // matrix and bone world matrices stay consistent with the bind-time inverses.
+    const wrapper = new THREE.Group();
+    wrapper.name = 'HandWrapper';
+    wrapper.scale.set(10, 10, 10);
     
-    return { group: scene, skeleton, bones: boneMap, mesh: skinnedMesh };
+    // Orient the hand so fingers point UPWARD (+Y) with palm facing the camera (+Z).
+    // The WebXR model native orientation:
+    //   - Fingers extend along world -Y (downward)
+    //   - Palm normal is along world +X (to the right)
+    // 
+    // Rotation of PI around X flips -Y to +Y (fingers point up).
+    // Rotation of PI/2 around Y rotates +X to +Z (palm faces camera).
+    // Combined: Euler(PI, PI/2, 0) in XYZ order.
+    wrapper.rotation.set(Math.PI, Math.PI / 2, 0);
+    wrapper.add(scene);
+    
+    return { group: wrapper, skeleton, bones: boneMap, mesh: skinnedMesh };
   } catch (e) {
     console.log('No GLTF model found, using procedural hand:', e.message);
     return null;
@@ -901,10 +1120,21 @@ export function createHandModel() {
  * @returns {Promise<{group, skeleton, bones, mesh}>}
  */
 export async function createHandModelAsync(gltfPath = '/models/hand.glb') {
-  const gltfResult = await loadGLTFHand(gltfPath);
+  let gltfResult = await loadGLTFHand(gltfPath);
   if (gltfResult) {
     console.log('Loaded GLTF hand model');
     return gltfResult;
   }
+  
+  // Try fallback to scene.gltf if the first one failed
+  if (gltfPath !== '/models/scene.gltf') {
+     console.log('First model failed, trying /models/scene.gltf');
+     gltfResult = await loadGLTFHand('/models/scene.gltf');
+     if (gltfResult) {
+        console.log('Loaded GLTF hand model from /models/scene.gltf');
+        return gltfResult;
+     }
+  }
+
   return createProceduralHand();
 }

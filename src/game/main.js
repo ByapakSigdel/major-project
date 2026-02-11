@@ -14,7 +14,7 @@
 import './style.css';
 import * as THREE from 'three';
 import { GameSceneManager } from './GameSceneManager.js';
-import { createHandModel } from '../rendering/HandModel.js';
+import { createHandModelAsync } from '../rendering/HandModel.js';
 import { SyntheticDataGenerator } from '../data/SyntheticDataGenerator.js';
 import { HandAnimator } from '../animation/HandAnimator.js';
 import { HandInteraction } from './HandInteraction.js';
@@ -30,20 +30,20 @@ async function init() {
   const container = document.getElementById('game-container');
   const sceneManager = new GameSceneManager(container);
 
-  // 2. Create realistic procedural hand (animated, with bones)
-  const { group: handGroup, bones } = createHandModel();
-  handGroup.scale.setScalar(0.4);
+  // 2. Create hand model (load GLTF with proper bone mapping, fallback to procedural)
+  const { group: handGroup, bones } = await createHandModelAsync('/models/human_hand_base_mesh.glb');
+  handGroup.scale.setScalar(0.55);
   handGroup.userData.roomObject = false; // Don't clear with room
   sceneManager.scene.add(handGroup);
 
   // 3. Data source
   const dataSource = new SyntheticDataGenerator({
-    mode: 'random',
+    mode: 'fist',
     updateRate: 30,
     speed: 0.8,
   });
 
-  // 4. Animator (always available with procedural hand)
+  // 4. Animator (maps data → bone rotations)
   const animator = new HandAnimator(bones, 0.15);
 
   // 5. Interaction system
@@ -213,19 +213,17 @@ async function init() {
   sceneManager.onUpdate((dt) => {
     animator.update(dt);
 
-    // Update camera from hand orientation
-    if (latestFrame && latestFrame.orientation) {
-      sceneManager.updateCameraFromOrientation(latestFrame.orientation);
-    }
+    // Mouse look + WASD movement
+    sceneManager.moveCamera(dt);
 
-    // Update hand model position relative to camera
+    // Update hand model position relative to camera (FPP VR placement)
     const cam = sceneManager.camera;
-    const handOffset = new THREE.Vector3(0.35, -0.35, -0.7);
+    const handOffset = new THREE.Vector3(0.3, -0.35, -0.5);
     handOffset.applyQuaternion(cam.quaternion);
     handGroup.position.copy(cam.position).add(handOffset);
     handGroup.quaternion.copy(cam.quaternion);
-    handGroup.rotateX(-0.3);
-    handGroup.rotateY(-0.2);
+    handGroup.rotateX(-0.4);   // tilt hand down (looking at palm)
+    handGroup.rotateY(-0.15);  // slight inward angle
 
     // Update interaction system
     if (latestFrame) {
