@@ -33,10 +33,8 @@ export function createRoom1(builder, inventory) {
   });
 
   // Lighting - well-lit study
-  builder.createCeilingLight(0, 3.15, 0, 0xffeedd, 2.5);
-  builder.createCeilingLight(-1.5, 3.15, -1.5, 0xffeedd, 1.2);
+  builder.createCeilingLight(0, 3.15, 0, 0xffeedd, 3.0);
   builder.createLamp(-2, 0, -2.2, 0xffddaa, 1.2);
-  builder.createLamp(2, 0.76, -1.5, 0xffe8cc, 0.8);
 
   // Furniture
   const desk = builder.createTable(0, 0, -1.5, 1.4, 0.7, 0.76);
@@ -75,6 +73,7 @@ export function createRoom1(builder, inventory) {
     state,
     name: 'The Study',
     subtitle: 'Find the key to escape...',
+    bounds: { x: 2.5, z: 2.5 }, // 6×6 room with margin
     checkSolved: () => state.solved,
     handleInteraction: (obj, heldItem, addToInventory, showClue, showMessage, unlockDoor) => {
       // Note interaction
@@ -100,11 +99,11 @@ export function createRoom1(builder, inventory) {
         return;
       }
     },
-    handleGrab: (obj, addToInventory) => {
+    handleGrab: (obj, addToInventory, showMessage) => {
       if (obj.userData.keyId === 'room1_key') {
         state.keyFound = true;
         addToInventory(obj);
-        showMessage && showMessage('You found the Golden Key!');
+        if (showMessage) showMessage('You found the Golden Key!');
       }
     },
   };
@@ -134,9 +133,7 @@ export function createRoom2(builder, inventory) {
   });
 
   // Lab lighting (bright clinical fluorescent feel)
-  builder.createCeilingLight(0, 3.45, 0, 0xdde8ff, 2.8);
-  builder.createCeilingLight(-2, 3.45, -2, 0xccddff, 1.8);
-  builder.createCeilingLight(2, 3.45, 2, 0xccddff, 1.8);
+  builder.createCeilingLight(0, 3.45, 0, 0xdde8ff, 3.5);
 
   // Lab tables
   builder.createTable(-2, 0, -2, 1.6, 0.8, 0.9);
@@ -178,6 +175,7 @@ export function createRoom2(builder, inventory) {
     state,
     name: 'The Laboratory',
     subtitle: 'Crack the color code...',
+    bounds: { x: 3.0, z: 3.0 }, // 7×7 room with margin
     checkSolved: () => state.solved,
     handleInteraction: (obj, heldItem, addToInventory, showClue, showMessage, unlockDoor) => {
       // Clue notes
@@ -225,7 +223,7 @@ export function createRoom2(builder, inventory) {
         return;
       }
     },
-    handleGrab: (obj, addToInventory) => {},
+    handleGrab: (obj, addToInventory, showMessage) => {},
   };
 }
 
@@ -254,11 +252,9 @@ export function createRoom3(builder, inventory) {
   });
 
   // Dramatic but well-lit lighting
-  builder.createCeilingLight(0, 3.95, 0, 0xffeedd, 3.0);
-  builder.createCeilingLight(-2.5, 3.95, -2.5, 0xeeddcc, 1.5);
-  builder.createCeilingLight(2.5, 3.95, 2.5, 0xeeddcc, 1.5);
-  builder.createLamp(-3, 0, -3, 0xffaa77, 1.0);
-  builder.createLamp(3, 0, -3, 0x88aaff, 1.0);
+  builder.createCeilingLight(0, 3.95, 0, 0xffeedd, 3.5);
+  builder.createLamp(-3, 0, -3, 0xffaa77, 1.2);
+  builder.createLamp(3, 0, -3, 0x88aaff, 1.2);
 
   // Furniture
   builder.createTable(0, 0, -2, 1.8, 0.8, 0.8);
@@ -321,6 +317,7 @@ export function createRoom3(builder, inventory) {
     state,
     name: 'The Vault',
     subtitle: 'The final challenge awaits...',
+    bounds: { x: 3.5, z: 3.5 }, // 8×8 room with margin
     checkSolved: () => state.solved,
     handleInteraction: (obj, heldItem, addToInventory, showClue, showMessage, unlockDoor) => {
       // Clue notes
@@ -383,15 +380,18 @@ export function createRoom3(builder, inventory) {
         return;
       }
     },
-    handleGrab: (obj, addToInventory) => {
+    handleGrab: (obj, addToInventory, showMessage) => {
       if (obj.userData.keyId === 'red_card') {
         state.redCardFound = true;
         addToInventory(obj);
+        if (showMessage) showMessage('You found a Red Key Card!');
       } else if (obj.userData.keyId === 'blue_card') {
         state.blueCardFound = true;
         addToInventory(obj);
+        if (showMessage) showMessage('You found a Blue Key Card!');
       } else if (obj.userData.keyId === 'exit_key') {
         addToInventory(obj);
+        if (showMessage) showMessage('You picked up the Exit Key!');
       }
     },
   };

@@ -32,8 +32,16 @@ async function init() {
 
   // 2. Create hand model (load GLTF with proper bone mapping, fallback to procedural)
   const { group: handGroup, bones } = await createHandModelAsync('/models/human_hand_base_mesh.glb');
-  handGroup.scale.setScalar(0.55);
+  handGroup.scale.setScalar(0.6);
   handGroup.userData.roomObject = false; // Don't clear with room
+  // Render hand on top of everything (separate pass) to prevent clipping into walls
+  handGroup.renderOrder = 999;
+  handGroup.traverse((child) => {
+    if (child.isMesh) {
+      child.material.depthTest = false;
+      child.renderOrder = 999;
+    }
+  });
   sceneManager.scene.add(handGroup);
 
   // 3. Data source
@@ -161,9 +169,13 @@ async function init() {
     // Load new room
     currentRoom = nextRoomData;
 
+    // Set bounds for collision
+    if (nextRoomData.bounds) {
+      sceneManager.setRoomBounds(nextRoomData.bounds.x, nextRoomData.bounds.z);
+    }
+
     // Reset camera
-    sceneManager.camera.position.set(0, 1.6, 0);
-    sceneManager.camera.lookAt(0, 1.6, -2);
+    sceneManager.resetCamera();
 
     ui.setActiveRoom(currentRoomIndex);
     isTransitioning = false;
@@ -188,9 +200,9 @@ async function init() {
     );
     ui.setActiveRoom(0);
 
-    // Reset camera
-    sceneManager.camera.position.set(0, 1.6, 0);
-    sceneManager.camera.lookAt(0, 1.6, -2);
+    // Reset camera + bounds
+    sceneManager.setRoomBounds(2.5, 2.5);
+    sceneManager.resetCamera();
 
     // Hide win screen
     document.getElementById('win-screen').classList.add('hidden');
@@ -199,6 +211,7 @@ async function init() {
   // ---- Initialize First Room ----
 
   currentRoom = createRoom1(roomBuilder, inventory);
+  sceneManager.setRoomBounds(2.5, 2.5); // 6×6 room, margin 0.5
   ui.setActiveRoom(0);
 
   // ---- Data Pipeline ----
@@ -216,14 +229,18 @@ async function init() {
     // Mouse look + WASD movement
     sceneManager.moveCamera(dt);
 
-    // Update hand model position relative to camera (FPP VR placement)
+    // ---- Position hand in view (FPP VR placement) ----
+    // Place hand at bottom-right of viewport, always visible.
+    // Offset is in camera-local space: right(+X), down(-Y), forward(-Z).
     const cam = sceneManager.camera;
-    const handOffset = new THREE.Vector3(0.3, -0.35, -0.5);
+    const handOffset = new THREE.Vector3(0.25, -0.3, -0.45);
     handOffset.applyQuaternion(cam.quaternion);
     handGroup.position.copy(cam.position).add(handOffset);
+
+    // Copy camera orientation, then tilt hand naturally
     handGroup.quaternion.copy(cam.quaternion);
-    handGroup.rotateX(-0.4);   // tilt hand down (looking at palm)
-    handGroup.rotateY(-0.15);  // slight inward angle
+    handGroup.rotateX(-0.5);   // tilt fingers forward/down
+    handGroup.rotateZ(0.15);   // slight roll so palm faces inward
 
     // Update interaction system
     if (latestFrame) {
@@ -237,6 +254,7 @@ async function init() {
         const target = sceneManager.getTargetObject();
         if (target && target.distance < 3) {
           const obj = target.object;
+          ui.setTargeting(true);
           if (obj.userData.grabbable && !interactionState.isHolding) {
             ui.showInteractPrompt(true, 'to grab');
           } else if (obj.userData.interactive) {
@@ -245,6 +263,7 @@ async function init() {
             ui.showInteractPrompt(false);
           }
         } else {
+          ui.setTargeting(false);
           ui.showInteractPrompt(false);
         }
       }
@@ -267,7 +286,7 @@ async function init() {
 
             // Handle grab for key items
             if (obj.userData.grabbable && obj.userData.keyId) {
-              currentRoom.handleGrab(obj, addToInventory);
+              currentRoom.handleGrab(obj, addToInventory, showMessage);
               interactCooldown = 1.0;
             }
 
@@ -325,4 +344,17 @@ async function init() {
 }
 
 // Boot
-init();
+init().catch((err) => {
+  console.error('Game failed to initialize:', err);
+  const loading = document.getElementById('loading-screen');
+  if (loading) {
+    loading.innerHTML = `<div style="color:#ff4444;text-align:center;padding:2rem;">
+      <h2>Failed to start game</h2>
+      <p>${err.message || 'Unknown error'}</p>
+      <p style="opacity:0.6;font-size:0.85rem;">Check the browser console for details.</p>
+    </div>`;
+    loading.style.display = 'flex';
+    loading.style.alignItems = 'center';
+    loading.style.justifyContent = 'center';
+  }
+});

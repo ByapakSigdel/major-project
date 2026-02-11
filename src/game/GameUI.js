@@ -105,6 +105,14 @@ export class GameUI {
     }
   }
 
+  setTargeting(isTargeting) {
+    if (isTargeting) {
+      this._els.handCursor.classList.add('targeting');
+    } else {
+      this._els.handCursor.classList.remove('targeting');
+    }
+  }
+
   showInteractPrompt(show, text = 'to grab') {
     if (show) {
       this._els.interactPrompt.classList.remove('hidden');

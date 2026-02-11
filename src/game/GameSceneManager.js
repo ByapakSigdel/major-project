@@ -24,6 +24,7 @@ export class GameSceneManager {
     this._fps = 0;
 
     // Camera Euler state (yaw = Y rotation, pitch = X rotation)
+    // yaw = 0 → camera faces -Z (Three.js default forward)
     this._yaw = 0;
     this._pitch = 0;
 
@@ -33,6 +34,9 @@ export class GameSceneManager {
     // Reusable vectors for movement
     this._moveForward = new THREE.Vector3();
     this._moveRight = new THREE.Vector3();
+
+    // Room bounds for collision (half-extents, set per room)
+    this._roomBounds = { x: 2.5, z: 2.5 }; // default for a 6×6 room (with margin)
 
     this._initScene();
     this._initLights();
@@ -100,23 +104,26 @@ export class GameSceneManager {
 
   /** Clear the scene for room transition */
   clearRoom() {
-    // Remove all children except camera and lights
+    // Collect top-level room objects (direct children with roomObject flag)
     const toRemove = [];
-    this._scene.traverse((child) => {
+    this._scene.children.forEach((child) => {
       if (child.userData.roomObject) {
         toRemove.push(child);
       }
     });
     toRemove.forEach(obj => {
       this._scene.remove(obj);
-      if (obj.geometry) obj.geometry.dispose();
-      if (obj.material) {
-        if (Array.isArray(obj.material)) {
-          obj.material.forEach(m => m.dispose());
-        } else {
-          obj.material.dispose();
+      // Recursively dispose geometry and materials for this object and all descendants
+      obj.traverse((node) => {
+        if (node.geometry) node.geometry.dispose();
+        if (node.material) {
+          if (Array.isArray(node.material)) {
+            node.material.forEach(m => m.dispose());
+          } else {
+            node.material.dispose();
+          }
         }
-      }
+      });
     });
     this._interactables = [];
   }
@@ -126,10 +133,30 @@ export class GameSceneManager {
   /** Initialize pointer lock + keyboard listeners */
   _initControls() {
     const canvas = this._renderer.domElement;
+    const prompt = document.getElementById('pointer-lock-prompt');
 
     // Click to lock pointer
     canvas.addEventListener('click', () => {
       canvas.requestPointerLock();
+    });
+
+    // Show/hide prompt + cursor based on lock state
+    document.addEventListener('pointerlockchange', () => {
+      const locked = document.pointerLockElement === canvas;
+      if (prompt) {
+        if (locked) {
+          prompt.classList.add('hidden');
+        } else {
+          prompt.classList.remove('hidden');
+        }
+      }
+      // Clear all keys when pointer lock is lost to prevent stuck movement
+      if (!locked) {
+        this._keys.w = false;
+        this._keys.a = false;
+        this._keys.s = false;
+        this._keys.d = false;
+      }
     });
 
     // Mouse look
@@ -149,16 +176,21 @@ export class GameSceneManager {
     document.addEventListener('keyup',   (e) => onKey(e, false));
   }
 
+  /** Reset camera position and orientation */
+  resetCamera() {
+    this._camera.position.set(0, 1.6, 0);
+    this._yaw = 0;
+    this._pitch = 0;
+  }
+
   /**
    * Call once per frame (from render loop) to apply mouse look rotation
    * and WASD movement to the camera.
    */
   moveCamera(dt) {
     // Apply look rotation (order: Y then X, no roll)
-    this._camera.rotation.set(0, 0, 0, 'YXZ');
     this._camera.rotation.order = 'YXZ';
-    this._camera.rotation.y = this._yaw;
-    this._camera.rotation.x = this._pitch;
+    this._camera.rotation.set(this._pitch, this._yaw, 0);
 
     // WASD movement relative to camera direction (Y locked — no flying)
     const { w, a, s, d } = this._keys;
@@ -177,6 +209,17 @@ export class GameSceneManager {
     if (s) this._camera.position.addScaledVector(this._moveForward, -speed);
     if (d) this._camera.position.addScaledVector(this._moveRight,    speed);
     if (a) this._camera.position.addScaledVector(this._moveRight,   -speed);
+
+    // Clamp to room bounds (prevent walking through walls)
+    const b = this._roomBounds;
+    this._camera.position.x = Math.max(-b.x, Math.min(b.x, this._camera.position.x));
+    this._camera.position.z = Math.max(-b.z, Math.min(b.z, this._camera.position.z));
+  }
+
+  /** Set room bounds for collision (half-extents minus margin) */
+  setRoomBounds(halfWidth, halfDepth) {
+    this._roomBounds.x = halfWidth;
+    this._roomBounds.z = halfDepth;
   }
 
   // ---- Init ----
@@ -196,7 +239,6 @@ export class GameSceneManager {
       50
     );
     this._camera.position.set(0, 1.6, 0); // eye height
-    this._camera.lookAt(0, 1.6, -2);
 
     // Renderer
     this._renderer = new THREE.WebGLRenderer({
@@ -205,8 +247,7 @@ export class GameSceneManager {
     });
     this._renderer.setSize(window.innerWidth, window.innerHeight);
     this._renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this._renderer.shadowMap.enabled = true;
-    this._renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this._renderer.shadowMap.enabled = false;
     this._renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this._renderer.toneMappingExposure = 1.6;
 

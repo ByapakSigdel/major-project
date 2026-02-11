@@ -592,9 +592,6 @@ export class RoomBuilder {
     // Light
     const light = new THREE.PointLight(color, intensity, 8);
     light.position.y = 0.5;
-    light.castShadow = true;
-    light.shadow.mapSize.width = 512;
-    light.shadow.mapSize.height = 512;
     group.add(light);
 
     group.position.set(x, y, z);
@@ -625,9 +622,6 @@ export class RoomBuilder {
     // Actual light
     const light = new THREE.PointLight(color, intensity, 14);
     light.position.y = -0.1;
-    light.castShadow = true;
-    light.shadow.mapSize.width = 1024;
-    light.shadow.mapSize.height = 1024;
     group.add(light);
 
     group.position.set(x, y, z);
