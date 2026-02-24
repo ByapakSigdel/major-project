@@ -1,19 +1,59 @@
 /**
  * GameSceneManager - Three.js scene for the escape room game
- * 
- * Unlike the hand simulation SceneManager, this one:
- *   - Uses a first-person camera (no orbit controls)
- *   - Mouse look via pointer lock for camera rotation
- *   - WASD movement relative to camera direction
- *   - Supports raycasting for object interaction
- *   - Manages room-specific scenes
+ *
+ * Features:
+ *   - First-person camera with pointer-lock mouse look
+ *   - WASD movement with room-bounds collision
+ *   - Raycasting for object interaction
+ *   - Per-room lighting presets (sci-fi themed)
  */
 
 import * as THREE from 'three';
 
 const MOVE_SPEED = 3.0;    // units per second
 const MOUSE_SENS = 0.002;  // radians per pixel
-const PITCH_LIMIT = 80 * (Math.PI / 180); // ±80 degrees
+const PITCH_LIMIT = 80 * (Math.PI / 180); // +/-80 degrees
+
+// ---- Lighting Presets ----
+// Each preset defines ambient, hemisphere (sky/ground), directional, fog, and background
+const LIGHTING_PRESETS = {
+  // Room 1: Clean white-blue lab
+  calibration: {
+    background: 0x0c1018,
+    fogColor: 0x0c1018,
+    fogDensity: 0.015,
+    ambient: { color: 0x90a8d0, intensity: 0.7 },
+    hemi: { sky: 0xa8c8f0, ground: 0x304060, intensity: 0.5 },
+    dir: { color: 0xd0e0ff, intensity: 0.6, pos: [2, 5, 1] },
+  },
+  // Room 2: Amber/orange warning atmosphere
+  cognitive: {
+    background: 0x18120a,
+    fogColor: 0x18120a,
+    fogDensity: 0.018,
+    ambient: { color: 0xc09060, intensity: 0.5 },
+    hemi: { sky: 0xd0a050, ground: 0x503010, intensity: 0.4 },
+    dir: { color: 0xffc070, intensity: 0.5, pos: [-2, 4, 1] },
+  },
+  // Room 3: Deep red dramatic
+  core: {
+    background: 0x140808,
+    fogColor: 0x140808,
+    fogDensity: 0.02,
+    ambient: { color: 0xc04040, intensity: 0.4 },
+    hemi: { sky: 0xff4040, ground: 0x200808, intensity: 0.35 },
+    dir: { color: 0xff6040, intensity: 0.5, pos: [0, 6, 0] },
+  },
+  // Default / menu
+  default: {
+    background: 0x1a1a2e,
+    fogColor: 0x1a1a2e,
+    fogDensity: 0.02,
+    ambient: { color: 0x8090b8, intensity: 0.8 },
+    hemi: { sky: 0xb0c4e8, ground: 0x806040, intensity: 0.6 },
+    dir: { color: 0xffe8d0, intensity: 0.4, pos: [3, 5, 2] },
+  },
+};
 
 export class GameSceneManager {
   constructor(container) {
@@ -23,32 +63,21 @@ export class GameSceneManager {
     this._lastFpsTime = performance.now();
     this._fps = 0;
 
-    // Camera Euler state (yaw = Y rotation, pitch = X rotation)
-    // yaw = 0 → camera faces -Z (Three.js default forward)
     this._yaw = 0;
     this._pitch = 0;
-
-    // Movement key state
     this._keys = { w: false, a: false, s: false, d: false };
-
-    // Reusable vectors for movement
     this._moveForward = new THREE.Vector3();
     this._moveRight = new THREE.Vector3();
-
-    // Room bounds for collision (half-extents, set per room)
-    this._roomBounds = { x: 2.5, z: 2.5 }; // default for a 6×6 room (with margin)
+    this._roomBounds = { x: 2.5, z: 2.5 };
 
     this._initScene();
     this._initLights();
     this._initResize();
     this._initControls();
 
-    // Raycaster for object picking
     this._raycaster = new THREE.Raycaster();
     this._raycaster.far = 8;
     this._screenCenter = new THREE.Vector2(0, 0);
-
-    // Interactive objects registry
     this._interactables = [];
   }
 
@@ -57,10 +86,7 @@ export class GameSceneManager {
   get renderer() { return this._renderer; }
   get fps() { return this._fps; }
 
-  onUpdate(callback) {
-    this._onUpdateCallbacks.push(callback);
-  }
-
+  onUpdate(callback) { this._onUpdateCallbacks.push(callback); }
   start() {
     this._clock = new THREE.Clock();
     this._animate();
@@ -68,16 +94,12 @@ export class GameSceneManager {
 
   // ---- Raycasting ----
 
-  /** Get the object the camera is looking at (center of screen) */
   getTargetObject() {
     this._raycaster.setFromCamera(this._screenCenter, this._camera);
     const hits = this._raycaster.intersectObjects(this._interactables, true);
     if (hits.length > 0) {
-      // Walk up to find the root interactable
       let obj = hits[0].object;
-      while (obj.parent && !obj.userData.interactable) {
-        obj = obj.parent;
-      }
+      while (obj.parent && !obj.userData.interactable) obj = obj.parent;
       if (obj.userData.interactable) {
         return { object: obj, distance: hits[0].distance, point: hits[0].point };
       }
@@ -85,81 +107,84 @@ export class GameSceneManager {
     return null;
   }
 
-  /** Register an object as interactable */
   addInteractable(obj) {
     obj.userData.interactable = true;
     this._interactables.push(obj);
   }
 
-  /** Remove an interactable */
   removeInteractable(obj) {
     const idx = this._interactables.indexOf(obj);
     if (idx !== -1) this._interactables.splice(idx, 1);
   }
 
-  /** Clear all interactables */
-  clearInteractables() {
-    this._interactables = [];
-  }
+  clearInteractables() { this._interactables = []; }
 
-  /** Clear the scene for room transition */
   clearRoom() {
-    // Collect top-level room objects (direct children with roomObject flag)
     const toRemove = [];
     this._scene.children.forEach((child) => {
-      if (child.userData.roomObject) {
-        toRemove.push(child);
-      }
+      if (child.userData.roomObject === true) toRemove.push(child);
     });
     toRemove.forEach(obj => {
       this._scene.remove(obj);
-      // Recursively dispose geometry and materials for this object and all descendants
       obj.traverse((node) => {
         if (node.geometry) node.geometry.dispose();
         if (node.material) {
-          if (Array.isArray(node.material)) {
-            node.material.forEach(m => m.dispose());
-          } else {
-            node.material.dispose();
-          }
+          if (Array.isArray(node.material)) node.material.forEach(m => m.dispose());
+          else node.material.dispose();
         }
       });
     });
     this._interactables = [];
   }
 
-  // ---- Camera / Movement Control ----
+  // ---- Per-Room Lighting ----
 
-  /** Initialize pointer lock + keyboard listeners */
+  /**
+   * Switch the scene lighting to a named preset.
+   * @param {'calibration'|'cognitive'|'core'|'default'} presetName
+   */
+  setRoomLighting(presetName) {
+    const p = LIGHTING_PRESETS[presetName] || LIGHTING_PRESETS.default;
+
+    // Background & fog
+    this._scene.background.set(p.background);
+    this._scene.fog.color.set(p.fogColor);
+    this._scene.fog.density = p.fogDensity;
+
+    // Ambient
+    this._ambientLight.color.set(p.ambient.color);
+    this._ambientLight.intensity = p.ambient.intensity;
+
+    // Hemisphere
+    this._hemiLight.color.set(p.hemi.sky);
+    this._hemiLight.groundColor.set(p.hemi.ground);
+    this._hemiLight.intensity = p.hemi.intensity;
+
+    // Directional
+    this._dirLight.color.set(p.dir.color);
+    this._dirLight.intensity = p.dir.intensity;
+    this._dirLight.position.set(...p.dir.pos);
+  }
+
+  // ---- Camera / Movement ----
+
   _initControls() {
     const canvas = this._renderer.domElement;
     const prompt = document.getElementById('pointer-lock-prompt');
 
-    // Click to lock pointer
-    canvas.addEventListener('click', () => {
-      canvas.requestPointerLock();
-    });
+    canvas.addEventListener('click', () => canvas.requestPointerLock());
 
-    // Show/hide prompt + cursor based on lock state
     document.addEventListener('pointerlockchange', () => {
       const locked = document.pointerLockElement === canvas;
       if (prompt) {
-        if (locked) {
-          prompt.classList.add('hidden');
-        } else {
-          prompt.classList.remove('hidden');
-        }
+        locked ? prompt.classList.add('hidden') : prompt.classList.remove('hidden');
       }
-      // Clear all keys when pointer lock is lost to prevent stuck movement
       if (!locked) {
-        this._keys.w = false;
-        this._keys.a = false;
-        this._keys.s = false;
-        this._keys.d = false;
+        this._keys.w = false; this._keys.a = false;
+        this._keys.s = false; this._keys.d = false;
       }
     });
 
-    // Mouse look
     document.addEventListener('mousemove', (e) => {
       if (document.pointerLockElement !== canvas) return;
       this._yaw   -= e.movementX * MOUSE_SENS;
@@ -167,7 +192,6 @@ export class GameSceneManager {
       this._pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this._pitch));
     });
 
-    // WASD
     const onKey = (e, down) => {
       const key = e.key.toLowerCase();
       if (key in this._keys) this._keys[key] = down;
@@ -176,32 +200,22 @@ export class GameSceneManager {
     document.addEventListener('keyup',   (e) => onKey(e, false));
   }
 
-  /** Reset camera position and orientation */
   resetCamera() {
     this._camera.position.set(0, 1.6, 0);
     this._yaw = 0;
     this._pitch = 0;
   }
 
-  /**
-   * Call once per frame (from render loop) to apply mouse look rotation
-   * and WASD movement to the camera.
-   */
   moveCamera(dt) {
-    // Apply look rotation (order: Y then X, no roll)
     this._camera.rotation.order = 'YXZ';
     this._camera.rotation.set(this._pitch, this._yaw, 0);
 
-    // WASD movement relative to camera direction (Y locked — no flying)
     const { w, a, s, d } = this._keys;
     if (!(w || a || s || d)) return;
 
-    // Forward/back along camera's horizontal look direction
     this._camera.getWorldDirection(this._moveForward);
     this._moveForward.y = 0;
     this._moveForward.normalize();
-
-    // Right = forward × world up
     this._moveRight.crossVectors(this._moveForward, this._camera.up).normalize();
 
     const speed = MOVE_SPEED * dt;
@@ -210,13 +224,11 @@ export class GameSceneManager {
     if (d) this._camera.position.addScaledVector(this._moveRight,    speed);
     if (a) this._camera.position.addScaledVector(this._moveRight,   -speed);
 
-    // Clamp to room bounds (prevent walking through walls)
     const b = this._roomBounds;
     this._camera.position.x = Math.max(-b.x, Math.min(b.x, this._camera.position.x));
     this._camera.position.z = Math.max(-b.z, Math.min(b.z, this._camera.position.z));
   }
 
-  /** Set room bounds for collision (half-extents minus margin) */
   setRoomBounds(halfWidth, halfDepth) {
     this._roomBounds.x = halfWidth;
     this._roomBounds.z = halfDepth;
@@ -227,26 +239,14 @@ export class GameSceneManager {
   _initScene() {
     this._scene = new THREE.Scene();
     this._scene.background = new THREE.Color(0x1a1a2e);
+    this._scene.fog = new THREE.FogExp2(0x1a1a2e, 0.02);
 
-    // Subtle fog for depth
-    this._scene.fog = new THREE.FogExp2(0x1a1a2e, 0.035);
+    this._camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 30);
+    this._camera.position.set(0, 1.6, 0);
 
-    // Camera - first person
-    this._camera = new THREE.PerspectiveCamera(
-      65,
-      window.innerWidth / window.innerHeight,
-      0.05,
-      50
-    );
-    this._camera.position.set(0, 1.6, 0); // eye height
-
-    // Renderer
-    this._renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: false,
-    });
+    this._renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this._renderer.setSize(window.innerWidth, window.innerHeight);
-    this._renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this._renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this._renderer.shadowMap.enabled = false;
     this._renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this._renderer.toneMappingExposure = 1.6;
@@ -255,18 +255,15 @@ export class GameSceneManager {
   }
 
   _initLights() {
-    // Strong ambient for baseline visibility - no pitch-black areas
-    const ambient = new THREE.AmbientLight(0x8090b8, 0.8);
-    this._scene.add(ambient);
+    this._ambientLight = new THREE.AmbientLight(0x8090b8, 0.8);
+    this._scene.add(this._ambientLight);
 
-    // Soft hemisphere light: sky-blue from above, warm from below
-    const hemi = new THREE.HemisphereLight(0xb0c4e8, 0x806040, 0.6);
-    this._scene.add(hemi);
+    this._hemiLight = new THREE.HemisphereLight(0xb0c4e8, 0x806040, 0.6);
+    this._scene.add(this._hemiLight);
 
-    // Gentle directional fill (like window light)
-    const dirLight = new THREE.DirectionalLight(0xffe8d0, 0.4);
-    dirLight.position.set(3, 5, 2);
-    this._scene.add(dirLight);
+    this._dirLight = new THREE.DirectionalLight(0xffe8d0, 0.4);
+    this._dirLight.position.set(3, 5, 2);
+    this._scene.add(this._dirLight);
   }
 
   _initResize() {
@@ -289,10 +286,7 @@ export class GameSceneManager {
       this._lastFpsTime = now;
     }
 
-    for (const cb of this._onUpdateCallbacks) {
-      cb(deltaTime);
-    }
-
+    for (const cb of this._onUpdateCallbacks) cb(deltaTime);
     this._renderer.render(this._scene, this._camera);
   }
 }

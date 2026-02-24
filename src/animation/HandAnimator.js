@@ -139,6 +139,10 @@ export class HandAnimator {
     this._bones = bones;
     this._smoothing = smoothing;
 
+    // When true, wrist orientation from IMU is NOT applied to the wrist bone.
+    // Used in game mode where orientation is applied to the container instead.
+    this._skipWristOrientation = false;
+
     // Current interpolated state (what's actually displayed)
     this._currentState = this._createEmptyState();
     // Target state (where we're interpolating toward)
@@ -156,6 +160,15 @@ export class HandAnimator {
     // Debug axis helpers (toggle with toggleDebugAxes())
     this._debugAxes = [];
     this._debugVisible = false;
+  }
+
+  /** Enable/disable wrist orientation application on the wrist bone */
+  set skipWristOrientation(value) {
+    this._skipWristOrientation = !!value;
+  }
+
+  get skipWristOrientation() {
+    return this._skipWristOrientation;
   }
 
   /** Smoothing factor getter/setter */
@@ -407,6 +420,9 @@ export class HandAnimator {
    * 
    * The wrist bone's rest pose defines its default orientation.
    * We apply roll/pitch/yaw as incremental rotations on top.
+   * 
+   * When _skipWristOrientation is true (game mode), the wrist bone
+   * is left at its rest pose — orientation is applied to the container instead.
    */
   _applyWristOrientation() {
     const wrist = this._bones['wrist'];
@@ -414,6 +430,12 @@ export class HandAnimator {
 
     const rest = this._restPoses['wrist'];
     if (!rest) return;
+
+    if (this._skipWristOrientation) {
+      // In game mode: keep wrist at rest pose, orientation is handled externally
+      wrist.quaternion.copy(rest.quaternion);
+      return;
+    }
 
     const { roll, pitch, yaw } = this._currentState.orientation;
 

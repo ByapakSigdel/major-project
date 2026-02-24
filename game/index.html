@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Escape Room - Hand Controlled</title>
+    <title>Project ECHO - Escape Room</title>
   </head>
   <body>
     <div id="game-container"></div>
@@ -12,7 +12,8 @@
     <div id="loading-screen">
       <div class="loader-content">
         <div class="spinner"></div>
-        <p>Loading Escape Room...</p>
+        <p class="loading-title">PROJECT ECHO</p>
+        <p class="loading-sub">Initializing neural interface...</p>
       </div>
     </div>
 
@@ -29,11 +30,16 @@
         <div class="room-dot exit-dot" data-room="3"></div>
       </div>
 
-      <!-- Crosshair / hand cursor -->
+      <!-- Crosshair -->
       <div id="hand-cursor">
         <svg width="48" height="48" viewBox="0 0 48 48">
-          <circle cx="24" cy="24" r="18" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
-          <circle cx="24" cy="24" r="4" fill="rgba(255,255,255,0.6)"/>
+          <circle cx="24" cy="24" r="18" fill="none" stroke="rgba(0,255,200,0.3)" stroke-width="1.5"/>
+          <circle cx="24" cy="24" r="3" fill="rgba(0,255,200,0.7)"/>
+          <!-- Tick marks -->
+          <line x1="24" y1="2" x2="24" y2="8" stroke="rgba(0,255,200,0.2)" stroke-width="1"/>
+          <line x1="24" y1="40" x2="24" y2="46" stroke="rgba(0,255,200,0.2)" stroke-width="1"/>
+          <line x1="2" y1="24" x2="8" y2="24" stroke="rgba(0,255,200,0.2)" stroke-width="1"/>
+          <line x1="40" y1="24" x2="46" y2="24" stroke="rgba(0,255,200,0.2)" stroke-width="1"/>
         </svg>
       </div>
 
@@ -46,7 +52,15 @@
       <!-- Interaction prompt -->
       <div id="interact-prompt" class="hidden">
         <span class="prompt-key">Close fist</span>
-        <span class="prompt-text">to grab</span>
+        <span class="prompt-text">to interact</span>
+      </div>
+
+      <!-- ARIA dialogue box -->
+      <div id="aria-dialogue" class="hidden">
+        <div class="aria-content">
+          <span class="aria-label">ARIA</span>
+          <p id="aria-text"></p>
+        </div>
       </div>
 
       <!-- Inventory bar -->
@@ -63,9 +77,43 @@
       <!-- Clue display -->
       <div id="clue-display" class="hidden">
         <div class="clue-content">
-          <h3 id="clue-title">Clue Found!</h3>
+          <h3 id="clue-title">Document</h3>
           <p id="clue-text"></p>
-          <button id="clue-dismiss" class="btn">Got it</button>
+          <button id="clue-dismiss" class="btn">Dismiss</button>
+        </div>
+      </div>
+
+      <!-- Keypad overlay -->
+      <div id="keypad-overlay" class="hidden">
+        <div class="keypad-panel">
+          <div class="keypad-screen">
+            <span id="keypad-display-text"></span>
+            <span class="keypad-cursor">_</span>
+          </div>
+          <div id="keypad-buttons" class="keypad-grid">
+            <button class="kp-btn" data-val="1">1</button>
+            <button class="kp-btn" data-val="2">2</button>
+            <button class="kp-btn" data-val="3">3</button>
+            <button class="kp-btn" data-val="4">4</button>
+            <button class="kp-btn" data-val="5">5</button>
+            <button class="kp-btn" data-val="6">6</button>
+            <button class="kp-btn" data-val="7">7</button>
+            <button class="kp-btn" data-val="8">8</button>
+            <button class="kp-btn" data-val="9">9</button>
+            <button class="kp-btn kp-action kp-clr" data-val="CLR">CLR</button>
+            <button class="kp-btn" data-val="0">0</button>
+            <button class="kp-btn kp-action kp-ent" data-val="ENT">ENT</button>
+          </div>
+          <p class="keypad-hint">Press ESC to close</p>
+        </div>
+      </div>
+
+      <!-- Terminal choice overlay -->
+      <div id="terminal-overlay" class="hidden">
+        <div class="terminal-panel">
+          <h2 id="terminal-title">TERMINAL</h2>
+          <p id="terminal-desc"></p>
+          <div id="terminal-choices"></div>
         </div>
       </div>
 
@@ -80,8 +128,8 @@
       <!-- Win screen -->
       <div id="win-screen" class="hidden">
         <div class="win-content">
-          <h1>ESCAPED!</h1>
-          <p>You solved all the puzzles and escaped the rooms!</p>
+          <h1 id="win-title">ESCAPED</h1>
+          <p id="win-desc">You solved all the puzzles.</p>
           <div class="win-stats">
             <span>Time: <span id="win-time">0:00</span></span>
           </div>
@@ -90,7 +138,7 @@
         </div>
       </div>
 
-      <!-- Debug panel (sensor data) -->
+      <!-- Debug panel -->
       <div id="debug-panel-game">
         <h4>Hand Data <span class="live-dot"></span></h4>
         <div class="sensor-row-mini">
@@ -125,7 +173,7 @@
       <!-- Back button -->
       <a href="/" id="back-btn" title="Back to Hand Simulation">&larr; Back</a>
 
-      <!-- Pointer lock prompt (shown when not locked) -->
+      <!-- Pointer lock prompt -->
       <div id="pointer-lock-prompt">
         <div class="lock-prompt-content">
           <p>Click to look around</p>
