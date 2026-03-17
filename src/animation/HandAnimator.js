@@ -38,40 +38,38 @@ import { FINGER_NAMES } from '../rendering/HandModel.js';
 const DEG_TO_RAD = Math.PI / 180;
 
 /**
- * Anatomically correct maximum bend angles (radians) for each joint type.
+ * Hardware finger curl mapping.
  * 
- * Real human ranges (approximate):
- *   MCP (knuckle): ~90° flexion
- *   PIP (middle):  ~100-110° flexion
- *   DIP (tip):     ~70-80° flexion
+ * Each finger's 0.0–1.0 curl drives 3 joints using PI multipliers:
+ *   MCP (knuckle): curl * PI * 0.45
+ *   PIP (middle):  curl * PI * 0.55
+ *   DIP (tip):     curl * PI * 0.40
  * 
- * Reduced from true anatomical ranges to avoid mesh self-intersection
- * with the WebXR Generic Hand model.
+ * These values map the full curl range to natural flexion arcs
+ * without exceeding anatomical limits.
  */
-const JOINT_MAX_ANGLES = {
-  meta: 15 * DEG_TO_RAD,  // metacarpal: small flexion for smooth palm deformation
-  mcp: 50 * DEG_TO_RAD,   // proximal phalanx at MCP joint
-  pip: 55 * DEG_TO_RAD,   // intermediate phalanx at PIP joint
-  dip: 35 * DEG_TO_RAD,   // distal phalanx at DIP joint
+const FINGER_CURL_MULTIPLIERS = {
+  mcp: Math.PI * 0.45,   // ~81° at full curl
+  pip: Math.PI * 0.55,   // ~99° at full curl
+  dip: Math.PI * 0.40,   // ~72° at full curl
 };
 
 /**
- * Thumb joint angles.
+ * Thumb curl mapping — uses the same 3-joint structure but with
+ * separate base offsets on all 3 axes and additional curl influence
+ * on Y (opposition) and Z (roll).
  * 
- * Thumb anatomy is unique:
- *   CMC joint (metacarpal): ~50° flexion + opposition (rotation)
- *   MCP joint (proximal):   ~60° flexion
- *   IP joint (distal):      ~80° flexion
- * 
- * In our mapping:
- *   mcp = thumb metacarpal (CMC joint) — includes opposition
- *   pip = thumb proximal phalanx (MCP joint)
- *   dip = thumb distal phalanx (IP joint)
+ * Base offsets position the thumb at rest; curl adds flexion + opposition.
  */
-const THUMB_MAX_ANGLES = {
-  mcp: 25 * DEG_TO_RAD,   // CMC joint (metacarpal flexion + opposition)
-  pip: 30 * DEG_TO_RAD,   // MCP joint (proximal flexion)
-  dip: 35 * DEG_TO_RAD,   // IP joint (distal flexion)
+const THUMB_BASE_OFFSETS = {
+  mcp: { x: -0.2, y: -0.4, z: 0.3 },   // CMC base pose (radians)
+  pip: { x: -0.1, y: 0, z: 0 },          // MCP base
+  dip: { x: -0.1, y: 0, z: 0 },          // IP base
+};
+const THUMB_CURL_MULTIPLIERS = {
+  mcp: { x: Math.PI * 0.35, y: Math.PI * 0.25, z: Math.PI * 0.15 },
+  pip: { x: Math.PI * 0.45, y: 0, z: 0 },
+  dip: { x: Math.PI * 0.40, y: 0, z: 0 },
 };
 
 /**
@@ -107,21 +105,16 @@ const REST_SPLAY = {
 
 /**
  * Per-joint bend distribution.
- * In real hands, joints don't all bend equally from the same input.
- * The PIP (middle) joint leads, then MCP, then DIP follows.
- * Values are multipliers on the bend input (0-1).
+ * With the new PI multiplier system, distribution is baked into the multipliers.
+ * Metacarpal still gets a gentle engagement for palm deformation.
  */
 const JOINT_DISTRIBUTION = {
-  meta: 0.5,   // metacarpal engages gently (half the bend value)
-  mcp: 1.0,    // MCP leads the curl (knuckle bends first)
-  pip: 0.9,    // PIP follows closely
-  dip: 0.6,    // DIP follows passively (distal joint bends least)
+  meta: 0.3,   // metacarpal engages gently for palm deformation
 };
 
 // Reusable objects (avoid allocations in the render loop hot path)
 const _curlQuat = new THREE.Quaternion();
 const _restQuat = new THREE.Quaternion();
-const _oppositionQuat = new THREE.Quaternion();
 const _abductQuat = new THREE.Quaternion();
 const _splayQuat = new THREE.Quaternion();
 const _orientQuat = new THREE.Quaternion();
@@ -294,29 +287,28 @@ export class HandAnimator {
   // ---- Internal application methods ----
 
   /**
-   * Apply finger bend values to finger bones using quaternion rotation.
+   * Apply finger bend values to finger bones using the hardware curl mapping.
    * 
-   * After re-parenting, bones extend along local -Z. Flexion (curling toward
-   * palm) is achieved by POSITIVE rotation around the local X-axis.
+   * Each finger's 0.0–1.0 curl drives 3 joints:
+   *   MCP = curl * PI * 0.45
+   *   PIP = curl * PI * 0.55
+   *   DIP = curl * PI * 0.40
    * 
-   * Each joint in the chain bends with weighted distribution:
-   *   - meta: metacarpal (small flex for smooth palm deformation) — 50% of input
-   *   - MCP: the "knuckle" bend (proximal phalanx bone) — 100% of input (leads)
-   *   - PIP: middle joint (intermediate phalanx bone)   — 90% of input
-   *   - DIP: fingertip joint (distal phalanx bone)      — 60% of input (follows)
+   * Thumb uses separate base offsets + curl influence on X/Y/Z.
    * 
-   * MCP joints also get subtle abduction (finger splay) that increases with
-   * curl, causing fingers to naturally converge when making a fist.
+   * Metacarpal bones (non-thumb) get a small engagement for palm deformation.
+   * MCP joints also get subtle abduction (finger splay) and rest splay.
    * 
-   * Formula: bone.quaternion = restQuat * abductQuat * curlQuat
+   * Formula: bone.quaternion = restQuat * [splay] * [abduct] * curlQuat
    */
   _applyFingerRotations() {
     for (const finger of FINGER_NAMES) {
-      const bendValue = this._currentState.fingers[finger];
+      // Clamp bend value to [0.1, 1.0] before applying to joints.
+      const rawBend = this._currentState.fingers[finger];
+      const bendValue = Math.max(0.1, Math.min(1.0, rawBend));
       const isThumb = finger === 'thumb';
-      const maxAngles = isThumb ? THUMB_MAX_ANGLES : JOINT_MAX_ANGLES;
 
-      // Thumb has no separate metacarpal mapping (its metacarpal IS the mcp)
+      // Thumb has no separate metacarpal; others include meta
       const joints = isThumb ? ['mcp', 'pip', 'dip'] : ['meta', 'mcp', 'pip', 'dip'];
 
       for (const joint of joints) {
@@ -327,40 +319,36 @@ export class HandAnimator {
         const rest = this._restPoses[boneName];
         if (!rest) continue;
 
-        const maxAngle = maxAngles[joint];
-
         if (isThumb) {
-          this._applyThumbRotation(bone, rest, joint, bendValue, maxAngle);
-        } else {
-          // Apply per-joint distribution (PIP leads, DIP follows)
-          const distribution = JOINT_DISTRIBUTION[joint] || 1.0;
-          const effectiveBend = Math.min(1.0, bendValue * distribution);
-          
-          // Flexion: negative X rotation = curl toward palm
-          // (bones extend along -Z; after scene rotation the visual "toward palm"
-          //  direction corresponds to -X rotation in bone-local space)
-          const curlAngle = -(effectiveBend * maxAngle);
-          
+          this._applyThumbRotation(bone, rest, joint, bendValue);
+        } else if (joint === 'meta') {
+          // Metacarpal: small engagement for palm deformation
+          const distribution = JOINT_DISTRIBUTION.meta;
+          const curlAngle = -(bendValue * distribution * FINGER_CURL_MULTIPLIERS.mcp);
           _restQuat.copy(rest.quaternion);
           _curlQuat.setFromAxisAngle(_xAxis, curlAngle);
-          
+          bone.quaternion.copy(_restQuat).multiply(_curlQuat);
+        } else {
+          // MCP, PIP, DIP: use PI multipliers directly
+          const maxAngle = FINGER_CURL_MULTIPLIERS[joint];
+          const curlAngle = -(bendValue * maxAngle);
+
+          _restQuat.copy(rest.quaternion);
+          _curlQuat.setFromAxisAngle(_xAxis, curlAngle);
+
           if (joint === 'mcp') {
-            // MCP gets:
-            //   1. Rest splay (Z-axis) — constant spread when extended
-            //   2. Dynamic abduction (Y-axis) — convergence during curl
+            // MCP gets rest splay (Z) and dynamic abduction (Y)
             const restSplay = REST_SPLAY[finger] || 0;
             const dynamicAbduction = (MCP_ABDUCTION[finger] || 0) * bendValue;
-            
+
             _splayQuat.setFromAxisAngle(_zAxis, restSplay);
             _abductQuat.setFromAxisAngle(_yAxis, dynamicAbduction);
-            
-            // Compose: rest * splay * abduction * curl
+
             bone.quaternion.copy(_restQuat)
               .multiply(_splayQuat)
               .multiply(_abductQuat)
               .multiply(_curlQuat);
           } else {
-            // PIP and DIP: pure flexion
             bone.quaternion.copy(_restQuat).multiply(_curlQuat);
           }
         }
@@ -369,49 +357,32 @@ export class HandAnimator {
   }
 
   /**
-   * Apply thumb rotation with proper opposition mechanics.
+   * Apply thumb rotation with base offsets and curl influence on Y/Z.
    * 
-   * The thumb is anatomically unique:
-   *   - CMC joint (mapped to mcp): has 2 degrees of freedom
-   *     - Flexion (curl toward palm) around local X
-   *     - Opposition/adduction (rotate toward fingers) around local Y
-   *     The opposition engages progressively: starts gentle, accelerates
-   *     with more bend. This mimics real thumb behavior — light touch
-   *     uses mostly flexion, tight fist adds strong opposition.
-   *   - MCP joint (mapped to pip): primarily flexion around X
-   *   - IP joint (mapped to dip): primarily flexion around X
+   * The thumb has separate base offsets on all 3 axes for each joint,
+   * plus additional curl influence:
+   *   - MCP (CMC): base X/Y/Z + curl * multiplier on X, Y (opposition), Z (roll)
+   *   - PIP (MCP): base X + curl * multiplier on X
+   *   - DIP (IP):  base X + curl * multiplier on X
    * 
-   * When making a fist, the thumb both curls AND rotates inward.
-   * The opposition uses an eased curve (quadratic) rather than linear
-   * for more natural motion.
+   * This gives natural thumb posture at rest and progressive opposition
+   * when curling into a fist.
    */
-  _applyThumbRotation(bone, rest, joint, bendValue, maxAngle) {
+  _applyThumbRotation(bone, rest, joint, bendValue) {
     _restQuat.copy(rest.quaternion);
 
-    if (joint === 'mcp') {
-      // Thumb CMC (metacarpal): flexion + opposition
+    const base = THUMB_BASE_OFFSETS[joint];
+    const mult = THUMB_CURL_MULTIPLIERS[joint];
 
-      // Flexion: rotate around -X (curl toward palm)
-      const flexAngle = -(bendValue * maxAngle);
-      _curlQuat.setFromAxisAngle(_xAxis, flexAngle);
-      
-      // Opposition: rotate around Y (adduct toward other fingers)
-      // Use quadratic easing: opposition engages more at higher bend values.
-      // This prevents the thumb from rotating weirdly at low bend values
-      // while still achieving good opposition for a full fist.
-      const easedBend = bendValue * bendValue;  // quadratic ease-in
-      const oppositionAngle = -easedBend * maxAngle * 0.6;
-      _oppositionQuat.setFromAxisAngle(_yAxis, oppositionAngle);
-      
-      // Compose: rest * opposition * flexion
-      // Opposition first (gross rotation), then flexion (fine curl)
-      bone.quaternion.copy(_restQuat).multiply(_oppositionQuat).multiply(_curlQuat);
-    } else {
-      // Thumb MCP (pip) and IP (dip): pure flexion (negative X)
-      const curlAngle = -(bendValue * maxAngle);
-      _curlQuat.setFromAxisAngle(_xAxis, curlAngle);
-      bone.quaternion.copy(_restQuat).multiply(_curlQuat);
-    }
+    // Compute total rotation = base + curl * multiplier per axis
+    const rx = base.x + bendValue * (-mult.x);   // flexion (negative X = curl toward palm)
+    const ry = base.y + bendValue * (-mult.y);    // opposition (Y)
+    const rz = base.z + bendValue * mult.z;        // roll (Z)
+
+    _euler.set(rx, ry, rz, 'YXZ');
+    _curlQuat.setFromEuler(_euler);
+
+    bone.quaternion.copy(_restQuat).multiply(_curlQuat);
   }
 
   /**

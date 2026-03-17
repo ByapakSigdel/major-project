@@ -85,6 +85,7 @@ export class GameSceneManager {
   get camera() { return this._camera; }
   get renderer() { return this._renderer; }
   get fps() { return this._fps; }
+  get roomBounds() { return this._roomBounds; }
 
   onUpdate(callback) { this._onUpdateCallbacks.push(callback); }
   start() {
@@ -241,7 +242,7 @@ export class GameSceneManager {
     this._scene.background = new THREE.Color(0x1a1a2e);
     this._scene.fog = new THREE.FogExp2(0x1a1a2e, 0.02);
 
-    this._camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 30);
+    this._camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.05, 30);
     this._camera.position.set(0, 1.6, 0);
 
     this._renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });

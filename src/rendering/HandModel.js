@@ -385,170 +385,109 @@ const FINGER_CONFIG = {
 
 // ---- Materials ----
 
-/** Realistic skin material with subsurface scattering approximation */
+/** Unified skin material for cohesive hand appearance */
 function createSkinMaterial() {
-  return new THREE.MeshPhysicalMaterial({
-    color: 0xd4a07a,
-    roughness: 0.45,
+  return new THREE.MeshStandardMaterial({
+    color: 0xFFCBA4,
+    roughness: 0.8,
     metalness: 0.0,
-    clearcoat: 0.08,
-    clearcoatRoughness: 0.7,
-    sheen: 0.4,
-    sheenRoughness: 0.6,
-    sheenColor: new THREE.Color(0xffc8a0),
-    // Subsurface scattering approximation via transmission
-    thickness: 0.8,
-    transmission: 0.05,
-    ior: 1.38,
+    depthWrite: true,
+    depthTest: true,
     side: THREE.FrontSide,
   });
 }
 
-/** Slightly darker/warmer material for palm side and joint creases */
+/** Same unified skin material for palm (cohesive look) */
 function createPalmMaterial() {
-  return new THREE.MeshPhysicalMaterial({
-    color: 0xdba888,
-    roughness: 0.55,
+  return new THREE.MeshStandardMaterial({
+    color: 0xFFCBA4,
+    roughness: 0.8,
     metalness: 0.0,
-    clearcoat: 0.03,
-    sheen: 0.5,
-    sheenRoughness: 0.7,
-    sheenColor: new THREE.Color(0xffd0b0),
-    thickness: 0.6,
-    transmission: 0.03,
-    ior: 1.38,
+    depthWrite: true,
+    depthTest: true,
   });
 }
 
-/** Joint/crease material -- slightly redder, rougher */
+/** Same unified material for joints */
 function createJointMaterial() {
-  return new THREE.MeshPhysicalMaterial({
-    color: 0xc89878,
-    roughness: 0.6,
+  return new THREE.MeshStandardMaterial({
+    color: 0xFFCBA4,
+    roughness: 0.8,
     metalness: 0.0,
-    clearcoat: 0.02,
-    sheen: 0.2,
-    sheenColor: new THREE.Color(0xddaa88),
+    depthWrite: true,
+    depthTest: true,
   });
 }
 
-/** Fingernail material -- glossy, translucent */
+/** Fingernail material -- slightly lighter variant of skin */
 function createNailMaterial() {
-  return new THREE.MeshPhysicalMaterial({
-    color: 0xf0d8cc,
-    roughness: 0.15,
-    metalness: 0.02,
-    clearcoat: 0.6,
-    clearcoatRoughness: 0.2,
-    transparent: true,
-    opacity: 0.93,
-    thickness: 0.3,
-    transmission: 0.08,
-    ior: 1.54,
+  return new THREE.MeshStandardMaterial({
+    color: 0xFFCBA4,
+    roughness: 0.8,
+    metalness: 0.0,
+    depthWrite: true,
+    depthTest: true,
   });
 }
 
-/** Nail bed (pinkish, under the nail) */
+/** Nail bed — same unified material */
 function createNailBedMaterial() {
-  return new THREE.MeshPhysicalMaterial({
-    color: 0xf0a8a0,
-    roughness: 0.4,
+  return new THREE.MeshStandardMaterial({
+    color: 0xFFCBA4,
+    roughness: 0.8,
     metalness: 0.0,
-    transmission: 0.06,
-    thickness: 0.2,
-    ior: 1.38,
+    depthWrite: true,
+    depthTest: true,
   });
 }
 
-/** Tendon/vein material -- very subtle, slightly raised and cooler-toned */
+/** Tendon/vein material — unified skin */
 function createTendonMaterial() {
-  return new THREE.MeshPhysicalMaterial({
-    color: 0xc8a080,
-    roughness: 0.5,
+  return new THREE.MeshStandardMaterial({
+    color: 0xFFCBA4,
+    roughness: 0.8,
     metalness: 0.0,
-    clearcoat: 0.04,
-    sheen: 0.15,
-    sheenColor: new THREE.Color(0xccbb99),
+    depthWrite: true,
+    depthTest: true,
   });
 }
 
-/** Crease/wrinkle line material */
+/** Crease/wrinkle line material — unified skin */
 function createCreaseMaterial() {
   return new THREE.MeshStandardMaterial({
-    color: 0xb08868,
-    roughness: 0.75,
+    color: 0xFFCBA4,
+    roughness: 0.8,
     metalness: 0.0,
+    depthWrite: true,
+    depthTest: true,
   });
 }
 
 // ---- Geometry Builders ----
 
 /**
- * Create a realistic finger segment with oval cross-section.
- * Uses lathe geometry for organic shape: wider dorsal, narrower palmar.
- * Includes smooth taper from base to tip.
+ * Create a volumetric finger segment using CylinderGeometry.
+ * Each segment has a proper cylinder body with hemisphere caps for smooth joints.
+ * radiusBase/radiusTop are clamped to a minimum of 0.015 to prevent thin-line rendering.
  */
 function createRealisticFingerSegment(radiusBase, radiusTop, length, flatness, segments = RADIAL_SEGMENTS) {
-  const heightSegs = 8;
-  const meshes = [];
+  // Enforce minimum radius to prevent fingers rendering as thin lines
+  const rBot = Math.max(0.015, radiusBase);
+  const rTop = Math.max(0.015, radiusTop);
 
-  // Build a smooth capsule-like shape via merged BufferGeometry
-  const positions = [];
-  const normals = [];
-  const indices = [];
+  // Main cylinder body for the finger segment
+  const bodyGeo = new THREE.CylinderGeometry(rTop, rBot, length, segments, 4);
+  // Position so bottom of cylinder is at y=0 (joint origin) and top at y=length
+  bodyGeo.translate(0, length / 2, 0);
+  // Apply slight flattening for oval cross-section (dorsal-palmar direction)
+  bodyGeo.scale(1.0, 1.0, flatness);
 
-  for (let row = 0; row <= heightSegs; row++) {
-    const t = row / heightSegs;
-    const y = t * length;
-    // Smooth radius interpolation with slight bulge at midpoint
-    const bulge = Math.sin(t * Math.PI) * 0.008;
-    const r = THREE.MathUtils.lerp(radiusBase, radiusTop, t) + bulge;
-    const flat = THREE.MathUtils.lerp(flatness, flatness * 0.97, t);
-
-    for (let col = 0; col <= segments; col++) {
-      const angle = (col / segments) * Math.PI * 2;
-      // Oval cross section: flatten along z-axis (dorsal-palmar)
-      const x = Math.cos(angle) * r;
-      const z = Math.sin(angle) * r * flat;
-
-      // Add slight dorsal ridge (back of finger is flatter/ridged)
-      const dorsalFactor = Math.max(0, -Math.sin(angle));
-      const xAdjusted = x + dorsalFactor * r * 0.03;
-      const zAdjusted = z - dorsalFactor * r * flat * 0.06;
-
-      positions.push(xAdjusted, y, zAdjusted);
-
-      // Normal
-      const nx = Math.cos(angle);
-      const nz = Math.sin(angle) * flat;
-      const nLen = Math.sqrt(nx * nx + nz * nz);
-      normals.push(nx / nLen, 0, nz / nLen);
-    }
-  }
-
-  // Build indices
-  for (let row = 0; row < heightSegs; row++) {
-    for (let col = 0; col < segments; col++) {
-      const a = row * (segments + 1) + col;
-      const b = a + 1;
-      const c = a + (segments + 1);
-      const d = c + 1;
-      indices.push(a, c, b, b, c, d);
-    }
-  }
-
-  const bodyGeo = new THREE.BufferGeometry();
-  bodyGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  bodyGeo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-  bodyGeo.setIndex(indices);
-  bodyGeo.computeVertexNormals();
-
-  // Bottom cap (hemisphere at joint)
-  const capBotGeo = new THREE.SphereGeometry(radiusBase, segments, 6, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
+  // Bottom cap (hemisphere at joint base)
+  const capBotGeo = new THREE.SphereGeometry(rBot, segments, 6, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
   capBotGeo.scale(1.0, 0.6, flatness);
 
-  // Top cap (hemisphere at fingertip side)
-  const capTopGeo = new THREE.SphereGeometry(radiusTop, segments, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+  // Top cap (hemisphere at segment tip)
+  const capTopGeo = new THREE.SphereGeometry(rTop, segments, 6, 0, Math.PI * 2, 0, Math.PI / 2);
   capTopGeo.translate(0, length, 0);
   capTopGeo.scale(1.0, 0.6, flatness);
 
@@ -901,6 +840,7 @@ export function createProceduralHand() {
   const palmMesh = new THREE.Mesh(palmGeo, skinMat);
   palmMesh.castShadow = true;
   palmMesh.receiveShadow = true;
+  palmMesh.renderOrder = 1;
   palmBone.add(palmMesh);
 
   // Palm back surface (smooth dorsal bulge)
@@ -1011,14 +951,17 @@ export function createProceduralHand() {
       const bodyMesh = new THREE.Mesh(bodyGeo, skinMat);
       bodyMesh.castShadow = true;
       bodyMesh.receiveShadow = true;
+      bodyMesh.renderOrder = 1;
       bone.add(bodyMesh);
 
-      const capBotMesh = new THREE.Mesh(capBotGeo, jointMat);
+      const capBotMesh = new THREE.Mesh(capBotGeo, skinMat);
       capBotMesh.castShadow = true;
+      capBotMesh.renderOrder = 1;
       bone.add(capBotMesh);
 
       const capTopMesh = new THREE.Mesh(capTopGeo, skinMat);
       capTopMesh.castShadow = true;
+      capTopMesh.renderOrder = 1;
       bone.add(capTopMesh);
 
       // Finger pad (fleshy palm side) on each segment
@@ -1096,6 +1039,102 @@ export function createProceduralHand() {
   group.position.y = -0.3;
 
   return { group, skeleton, bones: boneMap, mesh: group };
+}
+
+// ============================================================
+//  Forearm + Wrist bridge geometry (for full-arm VR model)
+// ============================================================
+
+/**
+ * Creates a forearm group containing:
+ *   1. A tapered cylinder forearm (wider at elbow, narrower at wrist)
+ *   2. A short wrist bridge cylinder connecting forearm to palm
+ *
+ * Dimensions are proportional to the procedural hand's palm
+ * (PALM_LENGTH = 1.1, PALM_WIDTH = 0.85).
+ *
+ * The group's origin (0,0,0) is at the TOP of the wrist bridge,
+ * i.e. the attachment point where the hand connects. The forearm
+ * extends downward (-Y) from there.
+ *
+ * @returns {{ forearmGroup: THREE.Group, wristBridgeTop: THREE.Vector3 }}
+ */
+export function createForearmGroup() {
+  const skinMat = createSkinMaterial();
+
+  const forearmGroup = new THREE.Group();
+  forearmGroup.name = 'ForearmGroup';
+
+  // ---- Wrist bridge (short cylinder connecting forearm to palm) ----
+  // Slightly wider than the palm's wrist connector, smooth transition
+  const WRIST_RADIUS_TOP   = 0.22;   // where hand attaches (slightly wider than palm wrist)
+  const WRIST_RADIUS_BOT   = 0.26;   // where forearm meets
+  const WRIST_LENGTH        = 0.35;   // short bridging segment
+
+  const wristGeo = new THREE.CylinderGeometry(
+    WRIST_RADIUS_TOP, WRIST_RADIUS_BOT, WRIST_LENGTH, 20
+  );
+  const wristMesh = new THREE.Mesh(wristGeo, skinMat);
+  wristMesh.name = 'WristBridge';
+  wristMesh.position.set(0, -WRIST_LENGTH / 2, 0); // top at y=0, extends down
+  wristMesh.castShadow = true;
+  forearmGroup.add(wristMesh);
+
+  // ---- Forearm (tapered cylinder, wider at elbow end) ----
+  // 3-4x palm length = ~3.3 - 4.4 units. Using 3.8 for a good visual.
+  const FOREARM_RADIUS_WRIST = 0.26;  // matches wrist bridge bottom
+  const FOREARM_RADIUS_ELBOW = 0.38;  // wider at elbow (muscle bulk)
+  const FOREARM_LENGTH        = 3.8;
+
+  const forearmGeo = new THREE.CylinderGeometry(
+    FOREARM_RADIUS_WRIST, FOREARM_RADIUS_ELBOW, FOREARM_LENGTH, 22
+  );
+  const forearmMesh = new THREE.Mesh(forearmGeo, skinMat);
+  forearmMesh.name = 'Forearm';
+  // Position so the top of the forearm meets the bottom of the wrist bridge
+  forearmMesh.position.set(0, -WRIST_LENGTH - FOREARM_LENGTH / 2, 0);
+  forearmMesh.castShadow = true;
+  forearmGroup.add(forearmMesh);
+
+  // ---- Anatomical details ----
+
+  // Wrist bump (ulnar styloid — bony bump on the pinky/outer side of wrist)
+  const ulnarGeo = new THREE.SphereGeometry(0.06, 8, 6);
+  ulnarGeo.scale(1.3, 1.0, 0.9);
+  const ulnarMesh = new THREE.Mesh(ulnarGeo, skinMat);
+  ulnarMesh.position.set(0.24, -WRIST_LENGTH * 0.4, -0.02);
+  ulnarMesh.castShadow = true;
+  forearmGroup.add(ulnarMesh);
+
+  // Radial styloid (bony bump on thumb side of wrist)
+  const radialGeo = new THREE.SphereGeometry(0.05, 8, 6);
+  radialGeo.scale(1.1, 1.0, 0.8);
+  const radialMesh = new THREE.Mesh(radialGeo, skinMat);
+  radialMesh.position.set(-0.22, -WRIST_LENGTH * 0.4, -0.02);
+  radialMesh.castShadow = true;
+  forearmGroup.add(radialMesh);
+
+  // Subtle forearm muscle bulge (brachioradialis — upper 1/3)
+  const muscleBulgeGeo = new THREE.SphereGeometry(0.18, 12, 8);
+  muscleBulgeGeo.scale(1.0, 2.5, 0.8);
+  const muscleBulge = new THREE.Mesh(muscleBulgeGeo, skinMat);
+  muscleBulge.position.set(-0.12, -WRIST_LENGTH - FOREARM_LENGTH * 0.65, 0.06);
+  muscleBulge.castShadow = true;
+  forearmGroup.add(muscleBulge);
+
+  // Tendon ridges on the back of the wrist (extensor tendons)
+  for (let i = 0; i < 3; i++) {
+    const tendonGeo = new THREE.CylinderGeometry(0.012, 0.012, WRIST_LENGTH + 0.3, 6);
+    const tendonMesh = new THREE.Mesh(tendonGeo, skinMat);
+    tendonMesh.position.set(-0.06 + i * 0.06, -WRIST_LENGTH * 0.5, -WRIST_RADIUS_TOP * 0.85);
+    tendonMesh.castShadow = true;
+    forearmGroup.add(tendonMesh);
+  }
+
+  return {
+    forearmGroup,
+    wristBridgeTop: new THREE.Vector3(0, 0, 0), // hand attaches here
+  };
 }
 
 // ============================================================

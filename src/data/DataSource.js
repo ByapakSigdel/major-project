@@ -9,6 +9,7 @@
  * {
  *   fingers: { thumb: 0-1, index: 0-1, middle: 0-1, ring: 0-1, pinky: 0-1 },
  *   orientation: { roll: degrees, pitch: degrees, yaw: degrees },
+ *   joystick: { x: -1..1, y: -1..1 },   // optional; x = strafe, y = forward/back
  *   timestamp: ms
  * }
  * 

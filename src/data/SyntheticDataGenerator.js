@@ -158,6 +158,7 @@ export class SyntheticDataGenerator extends DataSource {
     return {
       fingers,
       orientation,
+      joystick: this._generateJoystick(t),
       timestamp: Date.now(),
     };
   }
@@ -269,6 +270,21 @@ export class SyntheticDataGenerator extends DataSource {
       roll:  smoothNoise(t * 0.7, 10) * 15,    // +-15 degrees
       pitch: smoothNoise(t * 0.5, 20) * 10,    // +-10 degrees
       yaw:   smoothNoise(t * 0.3, 30) * 20,    // +-20 degrees
+    };
+  }
+
+  /**
+   * Generate joystick values (simulates occasional walking input).
+   * Returns { x: -1..1, y: -1..1 } where Y is forward/back, X is strafe.
+   * In synthetic mode we do gentle periodic movement for testing.
+   */
+  _generateJoystick(t) {
+    // Slow sinusoidal movement — forward/back with occasional strafe
+    const y = smoothNoise(t * 0.15, 50) * 0.4;  // gentle forward/back
+    const x = smoothNoise(t * 0.1, 60) * 0.3;   // gentle strafe
+    return {
+      x: clamp(x, -1, 1),
+      y: clamp(y, -1, 1),
     };
   }
 }

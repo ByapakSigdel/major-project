@@ -10,6 +10,7 @@
  *   0.7 – 1.2 s  RETRACTING: hand pulls back, object shrinks/fades to inventory
  *   1.2 – 1.5 s  RELEASING : fingers return to sensor-driven values
  *
+ * All offsets are in CAMERA-LOCAL SPACE (hand is a child of the camera).
  * Returns a Promise so callers can `await animator.playPickup(...)`.
  */
 
@@ -22,10 +23,12 @@ const GRAB_END      = 0.7;
 const RETRACT_END   = 1.2;
 const RELEASE_END   = 1.5;
 
-// How far forward the hand reaches (in local camera space)
-const REACH_OFFSET = new THREE.Vector3(0, 0.05, -0.25);
+// How far forward the hand reaches (in camera-local space)
+// (Reach offset is computed dynamically per-animation based on target position)
 
 const _v3 = new THREE.Vector3();
+const _worldPos = new THREE.Vector3();
+const _camLocalPos = new THREE.Vector3();
 
 export class PickupAnimator {
   constructor() {
@@ -34,10 +37,10 @@ export class PickupAnimator {
     this._time = 0;
     this._resolve = null;
 
-    // Snapshot of hand container position at animation start (world)
+    // Snapshot of hand container position at animation start (camera-local)
     this._startPos = new THREE.Vector3();
-    // Target position to reach toward (world)
-    this._reachTarget = new THREE.Vector3();
+    // Target position to reach toward (camera-local offset from start)
+    this._reachOffset = new THREE.Vector3();
     // The object being picked up
     this._targetObject = null;
     // Original scale of target object
@@ -57,9 +60,9 @@ export class PickupAnimator {
   /**
    * Play a full reach-grab-retract sequence.
    *
-   * @param {THREE.Object3D} handContainer – the hand container group
+   * @param {THREE.Object3D} handContainer – the hand container (child of camera)
    * @param {THREE.Object3D} targetObject  – the world-space object to pick up
-   * @param {THREE.Camera}   camera        – active camera (for reach direction)
+   * @param {THREE.Camera}   camera        – active camera (parent of handContainer)
    * @returns {Promise<void>} resolves when the animation finishes
    */
   playPickup(handContainer, targetObject, camera) {
@@ -72,11 +75,12 @@ export class PickupAnimator {
       this._targetOrigScale.copy(targetObject.scale);
       this._startPos.copy(handContainer.position);
 
-      // Reach target: a point between current hand and the object
-      const objWorld = new THREE.Vector3();
-      targetObject.getWorldPosition(objWorld);
-      // Move 60% toward the object from the hand
-      this._reachTarget.copy(this._startPos).lerp(objWorld, 0.6);
+      // Convert object world position to camera-local space
+      targetObject.getWorldPosition(_worldPos);
+      camera.worldToLocal(_camLocalPos.copy(_worldPos));
+
+      // Reach offset: move 60% of the way from hand toward the object (in camera-local space)
+      this._reachOffset.copy(_camLocalPos).sub(this._startPos).multiplyScalar(0.6);
 
       this.state = 'reaching';
       this.fingerOverride = 0; // fingers open
@@ -96,9 +100,12 @@ export class PickupAnimator {
       this._targetObject = null; // no object to shrink
       this._startPos.copy(handContainer.position);
 
-      const objWorld = new THREE.Vector3();
-      targetObject.getWorldPosition(objWorld);
-      this._reachTarget.copy(this._startPos).lerp(objWorld, 0.4);
+      // Convert object world position to camera-local space
+      targetObject.getWorldPosition(_worldPos);
+      camera.worldToLocal(_camLocalPos.copy(_worldPos));
+
+      // Reach offset: move 40% toward the object (in camera-local space)
+      this._reachOffset.copy(_camLocalPos).sub(this._startPos).multiplyScalar(0.4);
 
       this.state = 'reaching';
       this.fingerOverride = 0.8; // fingers mostly closed for press
@@ -111,7 +118,7 @@ export class PickupAnimator {
    * @param {number} dt – delta time in seconds
    * @param {THREE.Object3D} handContainer – hand container to animate
    * @returns {{ positionOffset: THREE.Vector3 }|null}
-   *   A world-space offset to ADD to the hand's normal camera-following position,
+   *   A camera-local offset to ADD to the hand's anchor position,
    *   or null when idle.
    */
   update(dt, handContainer) {
@@ -126,8 +133,8 @@ export class PickupAnimator {
         const t = Math.min((this._time - REACH_START) / (REACH_END - REACH_START), 1);
         const ease = t * t * (3 - 2 * t); // smoothstep
 
-        // Move hand toward reach target
-        offset.copy(this._reachTarget).sub(this._startPos).multiplyScalar(ease);
+        // Move hand toward reach target (camera-local offset)
+        offset.copy(this._reachOffset).multiplyScalar(ease);
 
         // Fingers splay open
         this.fingerOverride = Math.max(0, 0.1 * (1 - ease));
@@ -143,7 +150,7 @@ export class PickupAnimator {
         const ease = t * t;
 
         // Hold at reach target
-        offset.copy(this._reachTarget).sub(this._startPos);
+        offset.copy(this._reachOffset);
 
         // Close fingers to fist
         this.fingerOverride = ease;
@@ -163,8 +170,7 @@ export class PickupAnimator {
         const ease = t * t * (3 - 2 * t);
 
         // Pull back from reach target to start
-        const fullOffset = _v3.copy(this._reachTarget).sub(this._startPos);
-        offset.copy(fullOffset).multiplyScalar(1 - ease);
+        offset.copy(this._reachOffset).multiplyScalar(1 - ease);
 
         // Keep fist closed
         this.fingerOverride = 1;
