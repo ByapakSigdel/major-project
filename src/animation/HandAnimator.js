@@ -62,14 +62,14 @@ const FINGER_CURL_MULTIPLIERS = {
  * Base offsets position the thumb at rest; curl adds flexion + opposition.
  */
 const THUMB_BASE_OFFSETS = {
-  mcp: { x: -0.2, y: -0.4, z: 0.3 },   // CMC base pose (radians)
-  pip: { x: -0.1, y: 0, z: 0 },          // MCP base
-  dip: { x: -0.1, y: 0, z: 0 },          // IP base
+  mcp: { x: 0, y: 0.4, z: -0.2 },       // CMC base pose - thumb positioned away
+  pip: { x: 0, y: 0.1, z: 0 },           // MCP base - slight outward
+  dip: { x: 0, y: 0.05, z: 0 },          // IP base - slight outward
 };
 const THUMB_CURL_MULTIPLIERS = {
-  mcp: { x: Math.PI * 0.35, y: Math.PI * 0.25, z: Math.PI * 0.15 },
-  pip: { x: Math.PI * 0.45, y: 0, z: 0 },
-  dip: { x: Math.PI * 0.40, y: 0, z: 0 },
+  mcp: { x: Math.PI * 0.15, y: Math.PI * 0.20, z: 0 },  // less flexion, more outward opposition
+  pip: { x: Math.PI * 0.25, y: 0, z: 0 },  // reduced curl
+  dip: { x: Math.PI * 0.20, y: 0, z: 0 },  // reduced curl
 };
 
 /**
@@ -357,32 +357,62 @@ export class HandAnimator {
   }
 
   /**
-   * Apply thumb rotation with base offsets and curl influence on Y/Z.
-   * 
-   * The thumb has separate base offsets on all 3 axes for each joint,
-   * plus additional curl influence:
-   *   - MCP (CMC): base X/Y/Z + curl * multiplier on X, Y (opposition), Z (roll)
-   *   - PIP (MCP): base X + curl * multiplier on X
-   *   - DIP (IP):  base X + curl * multiplier on X
-   * 
-   * This gives natural thumb posture at rest and progressive opposition
-   * when curling into a fist.
+   * Apply thumb rotation with proper opposition mechanics.
+   *
+   * The thumb is anatomically unique:
+   *   - CMC joint (mapped to mcp): has 2 degrees of freedom
+   *     - Flexion (curl toward palm) around local X
+   *     - Opposition/adduction (rotate toward fingers) around local Y
+   *     The opposition engages progressively: starts gentle, accelerates
+   *     with more bend. This mimics real thumb behavior — light touch
+   *     uses mostly flexion, tight fist adds strong opposition.
+   *   - MCP joint (mapped to pip): primarily flexion around X
+   *   - IP joint (mapped to dip): primarily flexion around X
+   *
+   * When making a fist, the thumb both curls AND rotates inward.
+   * The opposition uses an eased curve (quadratic) rather than linear
+   * for more natural motion.
    */
   _applyThumbRotation(bone, rest, joint, bendValue) {
     _restQuat.copy(rest.quaternion);
 
-    const base = THUMB_BASE_OFFSETS[joint];
-    const mult = THUMB_CURL_MULTIPLIERS[joint];
+    if (joint === 'mcp') {
+      // Thumb CMC (metacarpal): flexion + opposition with base posture
 
-    // Compute total rotation = base + curl * multiplier per axis
-    const rx = base.x + bendValue * (-mult.x);   // flexion (negative X = curl toward palm)
-    const ry = base.y + bendValue * (-mult.y);    // opposition (Y)
-    const rz = base.z + bendValue * mult.z;        // roll (Z)
+      const base = THUMB_BASE_OFFSETS[joint];
+      const mult = THUMB_CURL_MULTIPLIERS[joint];
 
-    _euler.set(rx, ry, rz, 'YXZ');
-    _curlQuat.setFromEuler(_euler);
+      // Apply base posture first (sets resting thumb position)
+      _euler.set(base.x, base.y, base.z, 'YXZ');
+      const basePose = new THREE.Quaternion().setFromEuler(_euler);
 
-    bone.quaternion.copy(_restQuat).multiply(_curlQuat);
+      // Flexion: rotate around -X (curl toward palm)
+      const flexAngle = -(bendValue * mult.x);
+      _curlQuat.setFromAxisAngle(_xAxis, flexAngle);
+
+      // Opposition: rotate around Y (OUTWARD, away from fingers)
+      // Use quadratic easing for natural motion
+      const easedBend = bendValue * bendValue;
+      const oppositionAngle = easedBend * mult.y;  // POSITIVE = outward
+      const oppositionQuat = new THREE.Quaternion().setFromAxisAngle(_yAxis, oppositionAngle);
+
+      // Compose: rest * basePose * opposition * flexion
+      bone.quaternion.copy(_restQuat).multiply(basePose).multiply(oppositionQuat).multiply(_curlQuat);
+    } else {
+      // Thumb MCP (pip) and IP (dip): base pose + flexion
+      const base = THUMB_BASE_OFFSETS[joint];
+      const mult = THUMB_CURL_MULTIPLIERS[joint];
+
+      // Apply base posture
+      _euler.set(base.x, base.y, base.z, 'YXZ');
+      const basePose = new THREE.Quaternion().setFromEuler(_euler);
+
+      // Pure flexion (negative X)
+      const curlAngle = -(bendValue * mult.x);
+      _curlQuat.setFromAxisAngle(_xAxis, curlAngle);
+
+      bone.quaternion.copy(_restQuat).multiply(basePose).multiply(_curlQuat);
+    }
   }
 
   /**
