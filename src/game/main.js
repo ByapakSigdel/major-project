@@ -15,7 +15,7 @@
 import "./style.css";
 import * as THREE from "three";
 import { GameSceneManager } from "./GameSceneManager.js";
-import { createHandModelAsync, createForearmGroup } from "../rendering/HandModel.js";
+import { createHandModelAsync } from "../rendering/HandModel.js";
 import { SyntheticDataGenerator } from "../data/SyntheticDataGenerator.js";
 import { HandAnimator } from "../animation/HandAnimator.js";
 import { HandInteraction } from "./HandInteraction.js";
@@ -27,23 +27,24 @@ import { GameUI } from "./GameUI.js";
 // ---- Constants ----
 const ROOM_CREATORS = [createRoom1, createRoom2, createRoom3];
 
-// IMU sensitivity multipliers (2-3x range for responsive hand control)
-const IMU_PITCH_SCALE = 2.5;
-const IMU_YAW_SCALE = 2.0;
-const IMU_ROLL_SCALE = 2.5;
+// IMU sensitivity multipliers (adjusted for natural hand movement)
+const IMU_PITCH_SCALE = 1.5;   // up/down tilt
+const IMU_YAW_SCALE = 1.5;     // left/right rotation
+const IMU_ROLL_SCALE = 2.0;    // wrist roll
 
 // IMU smoothing (lower = smoother / more lag)
-const IMU_SMOOTHING = 0.12;
+const IMU_SMOOTHING = 0.15;
 
-// Camera-space hand anchor position (lower-right, close to camera — VR-style)
-// These are the EXACT Round 3 values that were confirmed working/visible.
-const HAND_ANCHOR = new THREE.Vector3(0.20, -0.24, -0.30);
+// Camera-space hand anchor position (lower-right, in front of camera — VR-style)
+// Positioned as if it's the player's right hand reaching forward
+const HAND_ANCHOR = new THREE.Vector3(0.25, -0.20, -0.40);
 
-// Natural resting orientation (radians): relaxed arm pose entering from below
+// Natural resting orientation (radians): hand reaching forward, palm facing left/down
+// Like a right hand in front of you ready to grab
 const HAND_BASE_ROTATION = new THREE.Euler(
-  -35 * (Math.PI / 180),   // -35° X
-  160 * (Math.PI / 180),    // 160° Y
-  -15 * (Math.PI / 180),    // -15° Z
+  -15 * (Math.PI / 180),    // slight downward tilt
+  -10 * (Math.PI / 180),    // slight inward rotation
+  15 * (Math.PI / 180),     // slight roll for natural wrist angle
   'YXZ'
 );
 
@@ -93,11 +94,12 @@ async function init() {
   handPosePivot.name = "HandPosePivot";
   handPosePivot.add(handModel);
 
-  // Slight downward arm tilt
+  // Orient the hand so fingers point AWAY from camera (into the scene)
+  // Fingers should point forward (-Z), palm facing down
   handPosePivot.rotation.set(
-    15 * (Math.PI / 180),  // +15° X: tilt the arm entry point downward
-    0,
-    0
+    -Math.PI / 2,             // -90° X: rotate fingers forward
+    0,                        // no Y rotation
+    0                         // no Z roll
   );
 
   // Outer container: anchored as a CHILD of the camera (camera-local space)
@@ -105,43 +107,63 @@ async function init() {
   handContainer.name = "HandContainer";
   handContainer.userData.roomObject = false;
 
-  const fpsScale = isGLTF ? 0.08 : 0.15;
-  handContainer.scale.set(1.5, 1.5, 1.5);
+  const fpsScale = isGLTF ? 0.10 : 0.18;
+  handContainer.scale.set(1.8, 1.8, 1.8);
   // Apply model-type-specific scale on the inner pivot so the outer
-  // container stays at the uniform 1.5 for a large, physically present hand.
-  handPosePivot.scale.setScalar(fpsScale / 1.5);
+  // container stays at the uniform 1.8 for a large, physically present hand.
+  handPosePivot.scale.setScalar(fpsScale / 1.8);
   handContainer.add(handPosePivot);
   handContainer.renderOrder = 999;
 
   // ---- Add forearm geometry INTO the handContainer ----
-  // The forearm is authored in procedural-hand units (PALM_LENGTH=1.1 reference).
-  // We scale it by (fpsScale / 1.5) so it matches the hand's scale inside handContainer.
-  const { forearmGroup } = createForearmGroup();
-  forearmGroup.scale.setScalar(fpsScale / 1.5);
-  handContainer.add(forearmGroup);
+  // Don't add forearm for cleaner floating hand look
+  // const { forearmGroup } = createForearmGroup();
 
   // ---- Hand Material: Unified MeshStandardMaterial for cohesive skin ----
   const handSkinMaterial = new THREE.MeshStandardMaterial({
     color: 0xFFCBA4,
-    roughness: 0.8,
+    roughness: 0.7,
     metalness: 0.0,
-    side: THREE.FrontSide,
+    side: THREE.DoubleSide,
     depthWrite: true,
     depthTest: true,
   });
 
-  handContainer.traverse((child) => {
+  // First pass: hide everything, then selectively show hand meshes
+  handModel.traverse((child) => {
     if (child.isMesh) {
+      child.visible = false; // Hide by default
+    }
+  });
+
+  // Second pass: show only skinned meshes (the actual hand) and apply material
+  handModel.traverse((child) => {
+    if (child.isSkinnedMesh) {
+      // This is the actual hand mesh
       child.material = handSkinMaterial;
-      child.renderOrder = 1;
+      child.renderOrder = 1000;
+      child.frustumCulled = false;
+      child.visible = true;
+    } else if (child.isMesh && child.parent?.isBone) {
+      // Mesh attached to a bone (procedural hand parts)
+      child.material = handSkinMaterial;
+      child.renderOrder = 1000;
       child.frustumCulled = false;
       child.visible = true;
     }
-    // Ensure no Object3D in the hand hierarchy is accidentally hidden
-    if (child.isObject3D) {
+  });
+
+  // Ensure groups/bones are visible for hierarchy
+  handModel.traverse((child) => {
+    if (child.isBone || child.isGroup) {
       child.visible = true;
     }
   });
+
+  // Make sure handContainer itself is visible
+  handContainer.visible = true;
+  handPosePivot.visible = true;
+  handModel.visible = true;
 
   // ---- CAMERA-SPACE ANCHORING (exact Round 3 pattern) ----
   // Parent handContainer directly to the camera.
@@ -153,9 +175,13 @@ async function init() {
   handContainer.position.copy(HAND_ANCHOR);
 
   // Fill light on hand so it's always visible regardless of room lighting
-  const handFillLight = new THREE.PointLight(0xffe8d0, 0.6, 2.5, 2);
-  handFillLight.position.set(0, 0.3, 0.2);
+  const handFillLight = new THREE.PointLight(0xffffff, 1.0, 3.0, 1.5);
+  handFillLight.position.set(0, 0.4, 0.3);
   handContainer.add(handFillLight);
+
+  // Additional ambient light for the hand
+  const handAmbientLight = new THREE.AmbientLight(0xffffff, 0.5);
+  handContainer.add(handAmbientLight);
 
   // ---- 3. Data Source ----
   const dataSource = new SyntheticDataGenerator({
