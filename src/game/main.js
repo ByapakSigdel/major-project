@@ -897,24 +897,48 @@ async function init() {
     hardwareConnected = true;
     lastDataTime = Date.now();
     
+    // Support BOTH nested and flat data formats from hardware
+    // Nested: { fingers: { thumb: 512, ... }, orientation: { roll: 12, ... } }
+    // Flat:   { thumb: 512, index: 230, roll: 12, pitch: 5, ... }
+    
+    // Extract finger values - check nested first, then flat
+    const rawFingers = rawData.fingers || rawData;
+    const rawThumb = rawFingers.thumb;
+    const rawIndex = rawFingers.index;
+    const rawMiddle = rawFingers.middle;
+    const rawRing = rawFingers.ring;
+    const rawPinky = rawFingers.pinky;
+    
+    // Extract orientation values - check nested first, then flat
+    const rawOrientation = rawData.orientation || rawData;
+    const rawRoll = rawOrientation.roll;
+    const rawPitch = rawOrientation.pitch;
+    const rawYaw = rawOrientation.yaw;
+    
+    // Extract joystick values - check nested first, then flat
+    const rawJoystick = rawData.joystick || rawData;
+    const rawJoyX = rawJoystick.joyX ?? rawJoystick.x ?? rawData.joyX ?? 0;
+    const rawJoyY = rawJoystick.joyY ?? rawJoystick.y ?? rawData.joyY ?? 0;
+    
     // Normalize finger values
     const fingers = {
-      thumb: normalizeFingerValue(rawData.thumb),
-      index: normalizeFingerValue(rawData.index),
-      middle: normalizeFingerValue(rawData.middle),
-      ring: normalizeFingerValue(rawData.ring),
-      pinky: normalizeFingerValue(rawData.pinky)
+      thumb: normalizeFingerValue(rawThumb),
+      index: normalizeFingerValue(rawIndex),
+      middle: normalizeFingerValue(rawMiddle),
+      ring: normalizeFingerValue(rawRing),
+      pinky: normalizeFingerValue(rawPinky)
     };
     
     // Debug: Log raw and normalized values periodically
     debugLogTimer++;
     if (debugLogTimer >= 30) { // Every ~1 second at 30fps
+      console.log('Raw data format:', rawData.fingers ? 'NESTED' : 'FLAT');
       console.log('Raw flex:', { 
-        thumb: rawData.thumb, 
-        index: rawData.index, 
-        middle: rawData.middle,
-        ring: rawData.ring,
-        pinky: rawData.pinky
+        thumb: rawThumb, 
+        index: rawIndex, 
+        middle: rawMiddle,
+        ring: rawRing,
+        pinky: rawPinky
       });
       console.log('Normalized:', fingers);
       console.log('Fist threshold:', FIST_THRESHOLD, 'Override active:', pickupAnimator.fingerOverride !== null);
@@ -924,9 +948,9 @@ async function init() {
     // IMU auto-calibration on first samples
     if (!imuCalibrated && calibrationSamples.length < CALIBRATION_SAMPLES_NEEDED) {
       calibrationSamples.push({
-        roll: rawData.roll || 0,
-        pitch: rawData.pitch || 0,
-        yaw: rawData.yaw || 0
+        roll: rawRoll || 0,
+        pitch: rawPitch || 0,
+        yaw: rawYaw || 0
       });
       
       if (calibrationSamples.length === CALIBRATION_SAMPLES_NEEDED) {
@@ -941,11 +965,11 @@ async function init() {
     }
 
     // Apply IMU calibration
-    const orientation = calibrateIMU(rawData.roll, rawData.pitch, rawData.yaw);
+    const orientation = calibrateIMU(rawRoll, rawPitch, rawYaw);
 
     // Joystick with dead zone applied
-    let joyX = rawData.joyX || 0;
-    let joyY = rawData.joyY || 0;
+    let joyX = rawJoyX;
+    let joyY = rawJoyY;
     if (Math.abs(joyX) < JOYSTICK_DEAD_ZONE) joyX = 0;
     if (Math.abs(joyY) < JOYSTICK_DEAD_ZONE) joyY = 0;
 
