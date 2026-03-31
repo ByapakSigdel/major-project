@@ -834,14 +834,35 @@ async function init() {
   let calibrationSamples = [];
   const CALIBRATION_SAMPLES_NEEDED = 30;
 
-  // Helper to ensure finger values are in 0-1 range
+  // Flex sensor calibration - adjust based on your hardware
+  // Many flex sensors read HIGH when straight, LOW when bent
+  // Set to true if your sensors work this way
+  const INVERT_FLEX_SENSORS = true;
+  
+  // Min/Max ADC values for your flex sensors (calibrate these!)
+  // These define the range: straight hand = FLEX_MIN, full fist = FLEX_MAX
+  const FLEX_MIN = 200;   // ADC value when finger is straight (open hand)
+  const FLEX_MAX = 800;   // ADC value when finger is fully bent (fist)
+  
+  // Helper to ensure finger values are in 0-1 range with proper calibration
   const normalizeFingerValue = (value) => {
     if (typeof value !== 'number' || isNaN(value)) return 0.2; // default neutral
-    // If value is already 0-1, use as-is; if it's 0-1023 (ADC), normalize
-    if (value > 1) {
-      return Math.max(0, Math.min(1, value / 1023));
+    
+    // If value is already 0-1, use as-is
+    if (value >= 0 && value <= 1) {
+      return INVERT_FLEX_SENSORS ? (1 - value) : value;
     }
-    return Math.max(0, Math.min(1, value));
+    
+    // ADC value (0-1023 range) - apply calibration
+    const clamped = Math.max(FLEX_MIN, Math.min(FLEX_MAX, value));
+    let normalized = (clamped - FLEX_MIN) / (FLEX_MAX - FLEX_MIN);
+    
+    // Invert if sensors read high when straight
+    if (INVERT_FLEX_SENSORS) {
+      normalized = 1 - normalized;
+    }
+    
+    return Math.max(0, Math.min(1, normalized));
   };
 
   // Helper to apply IMU calibration offset
@@ -869,9 +890,12 @@ async function init() {
     animator.applyFrame(frame);
   };
 
-  // Hardware data listener
+  // Hardware data listener - runs continuously regardless of UI state
+  let lastDataTime = 0;
+  let debugLogTimer = 0;
   serial.onData = (rawData) => {
     hardwareConnected = true;
+    lastDataTime = Date.now();
     
     // Normalize finger values
     const fingers = {
@@ -881,6 +905,21 @@ async function init() {
       ring: normalizeFingerValue(rawData.ring),
       pinky: normalizeFingerValue(rawData.pinky)
     };
+    
+    // Debug: Log raw and normalized values periodically
+    debugLogTimer++;
+    if (debugLogTimer >= 30) { // Every ~1 second at 30fps
+      console.log('Raw flex:', { 
+        thumb: rawData.thumb, 
+        index: rawData.index, 
+        middle: rawData.middle,
+        ring: rawData.ring,
+        pinky: rawData.pinky
+      });
+      console.log('Normalized:', fingers);
+      console.log('Fist threshold:', FIST_THRESHOLD, 'Override active:', pickupAnimator.fingerOverride !== null);
+      debugLogTimer = 0;
+    }
 
     // IMU auto-calibration on first samples
     if (!imuCalibrated && calibrationSamples.length < CALIBRATION_SAMPLES_NEEDED) {
@@ -935,8 +974,18 @@ async function init() {
     ui.showMessage('Recalibrating IMU... Hold hand still');
   };
   
-  // Expose recalibration to window for debug
+  // Expose debug functions and calibration settings to window
   window.recalibrateIMU = recalibrateIMU;
+  window.flexCalibration = {
+    get invertSensors() { return INVERT_FLEX_SENSORS; },
+    get fistThreshold() { return FIST_THRESHOLD; },
+    get fingersRequired() { return FIST_FINGERS_REQUIRED; },
+    getLatestFrame: () => latestFrame,
+    isAnimating: () => pickupAnimator.isAnimating,
+    fingerOverride: () => pickupAnimator.fingerOverride
+  };
+  console.log('Debug: Use window.flexCalibration to check sensor state');
+  console.log('Debug: Use window.recalibrateIMU() to recalibrate IMU');
 
   // ---- 6. Game Logic Functions ----
   let inventory = new Set();
@@ -1081,6 +1130,31 @@ async function init() {
     // Camera movement via WASD
     sceneManager.moveCamera(dt);
 
+    // Update interaction state and UI feedback (always runs, regardless of hardware)
+    if (latestFrame) {
+      const interactionState = interaction.update(latestFrame, dt);
+      if (interactionState) {
+        ui.setGrabbing(interactionState.isGrabbing && interactionState.isHolding);
+        
+        // Show interact prompt when looking at an object
+        const target = sceneManager.getTargetObject();
+        if (target && target.distance < 3.5) {
+          const obj = target.object;
+          ui.setTargeting(true);
+          if (obj.userData.grabbable && !interactionState.isHolding) {
+            ui.showInteractPrompt(true, "Fist to grab");
+          } else if (obj.userData.interactive) {
+            ui.showInteractPrompt(true, "Fist to interact");
+          } else {
+            ui.showInteractPrompt(false);
+          }
+        } else {
+          ui.setTargeting(false);
+          ui.showInteractPrompt(false);
+        }
+      }
+    }
+
     // A. Joystick Locomotion (hardware joystick)
     if (latestFrame && hardwareConnected) {
       const moveMag = Math.sqrt(latestJoystick.x**2 + latestJoystick.y**2);
@@ -1155,13 +1229,17 @@ async function init() {
         if (target && target.distance < 3.5) {  // Slightly increased interaction distance
           const obj = target.object;
           
+          console.log('FIST DETECTED! Closed fingers:', closedCount, 'Target:', obj.userData.displayName || 'unknown');
+          
           if (obj.userData.grabbable) {
+            console.log('Triggering GRAB animation for:', obj.userData.displayName);
             pickupAnimator.playPickup(handContainer, obj, sceneManager.camera).then(() => {
               currentRoom.handleGrab(obj, addToInventory, m => ui.showMessage(m));
             });
             interactCooldown = 2.0;
             ui.showMessage('Grabbed: ' + (obj.userData.displayName || 'item'));
           } else if (obj.userData.interactive) {
+            console.log('Triggering PRESS animation for:', obj.userData.displayName);
             pickupAnimator.playPress(handContainer, obj, sceneManager.camera).then(() => {
               currentRoom.handleInteraction(obj, null, addToInventory, (t,tx) => ui.showClue(t,tx), m => ui.showMessage(m), unlockDoor, ui);
             });

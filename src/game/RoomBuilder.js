@@ -60,9 +60,36 @@ export class RoomBuilder {
     this._scene.add(obj);
     return obj;
   }
+  
+  // Helper to add subtle glow to interactable meshes
+  _addInteractGlow(obj) {
+    obj.traverse((child) => {
+      if (child.isMesh && child.material) {
+        // Skip if already has interact glow or has strong existing emissive
+        if (child.material._hasInteractGlow) return;
+        if (child.material.emissiveIntensity && child.material.emissiveIntensity > 0.2) return;
+        
+        // Clone material to avoid affecting other objects
+        const mat = child.material.clone();
+        // Add very subtle cyan emissive glow
+        if (!mat.emissive) {
+          mat.emissive = new THREE.Color(0x00ffcc);
+        } else {
+          // Blend subtle cyan with existing emissive
+          mat.emissive.lerp(new THREE.Color(0x00ffcc), 0.3);
+        }
+        mat.emissiveIntensity = Math.max(mat.emissiveIntensity || 0, 0.08);
+        mat._hasInteractGlow = true;
+        child.material = mat;
+      }
+    });
+  }
+  
   _interact(obj) {
     obj.userData.interactable = true;
     this._sm.addInteractable(obj);
+    // Add subtle glow to make interactable items slightly visible
+    this._addInteractGlow(obj);
     return obj;
   }
 
