@@ -10,12 +10,13 @@
  *   - RoomBuilder        (sci-fi room geometry)
  *   - EscapeRooms        (puzzle definitions: 3 rooms)
  *   - GameUI             (ARIA dialogue, keypad, terminal, HUD)
- */
+
 
 import "./style.css";
 import * as THREE from "three";
 import { GameSceneManager } from "./GameSceneManager.js";
 import { createHandModelAsync } from "../rendering/HandModel.js";
+import { SerialManager } from '../data/SerialManager.js';
 import { SyntheticDataGenerator } from "../data/SyntheticDataGenerator.js";
 import { HandAnimator } from "../animation/HandAnimator.js";
 import { HandInteraction } from "./HandInteraction.js";
@@ -190,6 +191,10 @@ async function init() {
     speed: 0.6,
   });
 
+  const serial = new SerialManager();
+
+  
+
   // ---- 4. Animator ----
   const animator = new HandAnimator(bones, 0.15);
   animator.skipWristOrientation = true;
@@ -215,6 +220,7 @@ async function init() {
   let latestFrame = null;
   let interactCooldown = 0;
   let isTransitioning = false;
+  
 
   ui.setGameStartTime(gameStartTime);
 
@@ -427,8 +433,12 @@ async function init() {
 
   // ---- Data Pipeline ----
 
-  let lastDataTimestamp = 0;  // for staleness detection
-  let latestJoystick = { x: 0, y: 0 };  // latest joystick input
+  //let lastDataTimestamp = 0;  // for staleness detection
+  //let latestJoystick = { x: 0, y: 0 };  // latest joystick input
+   let lastDataTimestamp = 0;  
+  let latestJoystick = { x: 0, y: 0 };
+ 
+  
 
   dataSource.onData((frame) => {
     latestFrame = frame;
@@ -743,3 +753,234 @@ init().catch((err) => {
     loading.style.justifyContent = "center";
   }
 });
+*/
+
+/**
+ * Game Main Entry Point — Project ECHO Escape Room (High-Performance Hardware Integration)
+ */
+
+import "./style.css";
+import * as THREE from "three";
+import { GameSceneManager } from "./GameSceneManager.js";
+import { createHandModelAsync } from "../rendering/HandModel.js";
+import { SerialManager } from '../data/SerialManager.js'; 
+import { SyntheticDataGenerator } from "../data/SyntheticDataGenerator.js";
+import { HandAnimator } from "../animation/HandAnimator.js";
+import { HandInteraction } from "./HandInteraction.js";
+import { PickupAnimator } from "./PickupAnimator.js";
+import { RoomBuilder } from "./RoomBuilder.js";
+import { createRoom1, createRoom2, createRoom3 } from "./EscapeRooms.js";
+import { GameUI } from "./GameUI.js";
+
+// ---- Constants ----
+const ROOM_CREATORS = [createRoom1, createRoom2, createRoom3];
+const IMU_PITCH_SCALE = 1.5;
+const IMU_YAW_SCALE = 1.5;
+const IMU_ROLL_SCALE = 2.0;
+const IMU_SMOOTHING = 0.15;
+const HAND_ANCHOR = new THREE.Vector3(0.25, -0.20, -0.40);
+const HAND_BASE_ROTATION = new THREE.Euler(-15 * (Math.PI / 180), -10 * (Math.PI / 180), 15 * (Math.PI / 180), 'YXZ');
+const RESTING_POSE = { thumb: 0.3, index: 0.2, middle: 0.2, ring: 0.25, pinky: 0.3 };
+const JOYSTICK_MOVE_SPEED = 0.05;
+const JOYSTICK_DEAD_ZONE = 0.005;
+const BOB_SPEED = 3.0;
+const SWAY_AMOUNT = 0.015;
+
+
+async function init() {
+  // ---- 1. Scene & Setup ----
+  const container = document.getElementById("game-container");
+  const sceneManager = new GameSceneManager(container);
+
+  // ---- 2. Hand Model ----
+  const { group: handModel, bones } = await createHandModelAsync("/models/human_hand_base_mesh.glb");
+  const handPosePivot = new THREE.Group();
+  handPosePivot.add(handModel);
+  handPosePivot.rotation.set(-Math.PI / 2, 0, 0);
+
+  const handContainer = new THREE.Group();
+  handContainer.scale.set(1.8, 1.8, 1.8);
+  const isGLTF = handModel.name === "HandWrapper";
+  handPosePivot.scale.setScalar((isGLTF ? 0.10 : 0.18) / 1.8);
+  handContainer.add(handPosePivot);
+  
+  const handSkinMaterial = new THREE.MeshStandardMaterial({ color: 0xFFCBA4, roughness: 0.7 });
+  handModel.traverse(c => { if(c.isSkinnedMesh || (c.isMesh && c.parent?.isBone)) { c.material = handSkinMaterial; c.visible = true; }});
+
+  sceneManager.camera.add(handContainer);
+  sceneManager.scene.add(sceneManager.camera);
+  handContainer.position.copy(HAND_ANCHOR);
+
+  // ---- 3. Systems ----
+  const serial = new SerialManager(); 
+  const dataSource = new SyntheticDataGenerator({ mode: "random", updateRate: 30, speed: 0.6 });
+  const animator = new HandAnimator(bones, 0.15);
+  animator.skipWristOrientation = true;
+  const interaction = new HandInteraction(sceneManager);
+  const pickupAnimator = new PickupAnimator();
+  const roomBuilder = new RoomBuilder(sceneManager.scene, sceneManager);
+  const ui = new GameUI();
+  
+  // ---- 4. Data Bridge (Performance Fix) ----
+  let currentHardwareData = null; // Buffer for incoming sensor data
+  let lastHardwareTimestamp = 0;
+  let latestFrame = null;
+  let latestJoystick = { x: 0, y: 0 };
+
+  // This listener only updates a variable in memory (very fast)
+  serial.onData = (rawData) => {
+    
+    lastHardwareTimestamp = Date.now();
+
+    const hardwareFrame = {
+    fingers: {
+      thumb: rawData.thumb,
+      index: rawData.index,
+      middle: rawData.middle,
+      ring: rawData.ring,
+      pinky: rawData.pinky
+    },
+    orientation: {
+      roll: rawData.roll,
+      pitch: rawData.pitch,
+      yaw: rawData.yaw
+    },
+    // Fix: Match your hardware keys "joyX" and "joyY"
+    joystick: {
+      x: rawData.joyX || 0,
+      y: rawData.joyY || 0
+    }
+  };
+  // Buffer it for the performance-safe loop
+  currentHardwareData = rawData; 
+  processFrame(hardwareFrame);
+
+  };
+
+  
+
+  // UI Button
+  const connectBtn = document.getElementById('game-connect-hw');
+  if (connectBtn) connectBtn.addEventListener('click', () => serial.connect());
+
+  // ---- 5. Unified Processor ----
+  const processFrame = (frame) => {
+    latestFrame = frame;
+    if (frame.joystick) latestJoystick = frame.joystick;
+    
+    // Grab animation overrides
+    if (pickupAnimator.fingerOverride !== null) {
+      const o = pickupAnimator.fingerOverride;
+      frame.fingers = { thumb: o, index: o, middle: o, ring: o, pinky: o };
+    }
+    animator.applyFrame(frame);
+  };
+
+  // Fallback synthetic data
+  dataSource.onData((frame) => {
+    if (Date.now() - lastHardwareTimestamp > 1000) processFrame(frame);
+  });
+
+  // ---- 6. Game Logic Functions ----
+  let inventory = new Set();
+  let currentRoom = createRoom1(roomBuilder, inventory);
+  let interactCooldown = 0;
+
+  function addToInventory(obj) {
+    const id = obj.userData.keyId;
+    if (id) { inventory.add(id); ui.addInventoryItem({ keyId: id, name: obj.userData.displayName || id, emoji: "🔑" }); }
+    obj.visible = false; sceneManager.removeInteractable(obj);
+  }
+
+  // ---- 7. Main Render Loop (The Heart of the App) ----
+  const _imuEuler = new THREE.Euler();
+  const _baseQuat = new THREE.Quaternion().setFromEuler(HAND_BASE_ROTATION);
+  const _smoothedIMU = { roll: 0, pitch: 0, yaw: 0 };
+  let _bobPhase = 0;
+  
+
+  sceneManager.onUpdate((dt) => {
+    // A. Check for hardware data once per frame (Prevent Hanging)
+    if (currentHardwareData) {
+      const d = currentHardwareData; // This is the raw JSON from your sensor
+      
+      processFrame({
+        fingers: { 
+          thumb: d.thumb, index: d.index, middle: d.middle, ring: d.ring, pinky: d.pinky 
+        },
+        orientation: { 
+          roll: d.roll, pitch: d.pitch, yaw: d.yaw 
+        },
+        // FIX: Mapping the flat hardware keys to the game's joystick object
+        joystick: { 
+          x: d.joyX || 0, 
+          y: -(d.joyY || 0) 
+        }
+      });
+      
+      currentHardwareData = null;
+    }
+    
+
+    animator.update(dt);
+    
+    sceneManager.moveCamera(dt);
+
+    // B. Locomotion
+    const moveMag = Math.sqrt(latestJoystick.x**2 + latestJoystick.y**2);
+    if (moveMag > JOYSTICK_DEAD_ZONE) {
+      const fwd = new THREE.Vector3(); sceneManager.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+      const side = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0,1,0)).normalize();
+      sceneManager.camera.position.addScaledVector(fwd, latestJoystick.y * JOYSTICK_MOVE_SPEED);
+      sceneManager.camera.position.addScaledVector(side, latestJoystick.x * JOYSTICK_MOVE_SPEED);
+      _bobPhase += dt * BOB_SPEED;
+    } else { _bobPhase *= 0.92; }
+
+    // C. IMU Smoothing & Rotation
+    handContainer.quaternion.copy(_baseQuat);
+    if (latestFrame?.orientation) {
+      const ori = latestFrame.orientation;
+      _smoothedIMU.roll += (ori.roll - _smoothedIMU.roll) * IMU_SMOOTHING;
+      _smoothedIMU.pitch += (ori.pitch - _smoothedIMU.pitch) * IMU_SMOOTHING;
+      _smoothedIMU.yaw += (ori.yaw - _smoothedIMU.yaw) * IMU_SMOOTHING;
+      _imuEuler.set(_smoothedIMU.pitch * 1.5 * (Math.PI/180), _smoothedIMU.yaw * 1.5 * (Math.PI/180), _smoothedIMU.roll * 2.0 * (Math.PI/180), 'YXZ');
+      handContainer.quaternion.multiply(new THREE.Quaternion().setFromEuler(_imuEuler));
+    }
+
+    handContainer.position.set(HAND_ANCHOR.x + (Math.cos(_bobPhase*0.5)*SWAY_AMOUNT), HAND_ANCHOR.y + (Math.sin(_bobPhase)*SWAY_AMOUNT), HAND_ANCHOR.z);
+
+    // D. Interaction Check (Hand Closing)
+    if (latestFrame && interactCooldown <= 0 && !pickupAnimator.isAnimating) {
+      const f = latestFrame.fingers;
+      if (f.index > 0.75 && f.middle > 0.75) { // Fist detected
+        const target = sceneManager.getTargetObject();
+        if (target && target.distance < 3) {
+          const obj = target.object;
+          if (obj.userData.grabbable) {
+            pickupAnimator.playPickup(handContainer, obj, sceneManager.camera).then(() => currentRoom.handleGrab(obj, addToInventory, m => ui.showMessage(m)));
+            interactCooldown = 2.0;
+          } else if (obj.userData.interactive) {
+            pickupAnimator.playPress(handContainer, obj, sceneManager.camera).then(() => currentRoom.handleInteraction(obj, null, addToInventory, (t,tx) => ui.showClue(t,tx), m => ui.showMessage(m), d => {}, ui));
+            interactCooldown = 1.5;
+          }
+        }
+      }
+    }
+    if (interactCooldown > 0) interactCooldown -= dt;
+  });
+
+  // E. UI Throttled Update (Prevent Lag)
+  let debugAccum = 0;
+  sceneManager.onUpdate((dt) => {
+    debugAccum += dt;
+    if (debugAccum >= 1 / 15) { // Only update UI 15 times a second
+      ui.updateDebug(animator.currentState, sceneManager.fps);
+      debugAccum = 0;
+    }
+  });
+
+  sceneManager.start();
+  ui.hideLoading();
+}
+
+init().catch(console.error);
