@@ -38,6 +38,65 @@ function smoothstep(edge0, edge1, x) {
   return t * t * (3 - 2 * t);
 }
 
+// src/data/SerialDataProvider.js
+export class SerialDataProvider {
+    constructor() {
+        this.reader = null;
+        this.port = null;
+        this.onDataReceived = null; // Callback for when we get new data
+        this.keepReading = true;
+    }
+
+    async connect() {
+        try {
+            // Request a port and open a connection.
+            this.port = await navigator.serial.requestPort();
+            await this.port.open({ baudRate: 115200 }); // Match your hardware's baud rate
+
+            const textDecoder = new TextDecoderStream();
+            const readableStreamClosed = this.port.readable.pipeTo(textDecoder.writable);
+            this.reader = textDecoder.readable
+                .pipeThrough(new TransformStream(new LineBreakTransformer()))
+                .getReader();
+
+            this.readLoop();
+        } catch (error) {
+            console.error('Serial connection failed:', error);
+        }
+    }
+
+    async readLoop() {
+        while (this.port.readable && this.keepReading) {
+            try {
+                const { value, done } = await this.reader.read();
+                if (done) break;
+                if (value) {
+                    try {
+                        const data = JSON.parse(value);
+                        if (this.onDataReceived) this.onDataReceived(data);
+                    } catch (e) {
+                        // Skip malformed JSON lines
+                    }
+                }
+            } catch (error) {
+                console.error('Read error:', error);
+            }
+        }
+    }
+}
+
+// Helper to handle incoming lines
+class LineBreakTransformer {
+    constructor() { this.container = ''; }
+    transform(chunk, controller) {
+        this.container += chunk;
+        const lines = this.container.split('\n');
+        this.container = lines.pop();
+        lines.forEach(line => controller.enqueue(line));
+    }
+    flush(controller) { controller.enqueue(this.container); }
+}
+
 
 export class SyntheticDataGenerator extends DataSource {
   /**
