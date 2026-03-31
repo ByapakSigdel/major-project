@@ -884,12 +884,130 @@ async function init() {
   // ---- 6. Game Logic Functions ----
   let inventory = new Set();
   let currentRoom = createRoom1(roomBuilder, inventory);
+  let currentRoomIndex = 0;
   let interactCooldown = 0;
+  let isTransitioning = false;
+  let gameStartTime = Date.now();
+
+  // Apply initial room lighting
+  if (currentRoom.lightingPreset) {
+    sceneManager.setRoomLighting(currentRoom.lightingPreset);
+  }
+  sceneManager.setRoomBounds(
+    currentRoom.bounds ? currentRoom.bounds.x : 2.5,
+    currentRoom.bounds ? currentRoom.bounds.z : 2.5
+  );
+  ui.setActiveRoom(0);
+  ui.setGameStartTime(gameStartTime);
 
   function addToInventory(obj) {
     const id = obj.userData.keyId;
-    if (id) { inventory.add(id); ui.addInventoryItem({ keyId: id, name: obj.userData.displayName || id, emoji: "🔑" }); }
+    if (id) { inventory.add(id); ui.addInventoryItem({ keyId: id, name: obj.userData.displayName || id, emoji: obj.userData.emoji || "🔑" }); }
     obj.visible = false; sceneManager.removeInteractable(obj);
+  }
+
+  function unlockDoor(doorObj) {
+    doorObj.userData.locked = false;
+    doorObj.userData.displayName = "Unlocked Door";
+
+    // Change lock indicator to green
+    doorObj.traverse((child) => {
+      if (child.userData.lockIndicator) {
+        child.material = new THREE.MeshStandardMaterial({
+          color: 0x22ff44,
+          emissive: 0x22ff44,
+          emissiveIntensity: 0.5,
+        });
+      }
+    });
+
+    // Animate door panel opening
+    let doorPanel = null;
+    doorObj.children.forEach((child) => {
+      if (child.geometry && child.geometry.type === "BoxGeometry") {
+        const params = child.geometry.parameters;
+        if (params && params.height > 1.5) {
+          doorPanel = child;
+        }
+      }
+    });
+
+    if (doorPanel) {
+      const startRot = doorPanel.rotation.y;
+      const openAnim = { progress: 0 };
+      const animateOpen = () => {
+        openAnim.progress += 0.02;
+        if (openAnim.progress <= 1) {
+          doorPanel.rotation.y = startRot + (Math.PI / 2) * openAnim.progress;
+          requestAnimationFrame(animateOpen);
+        }
+      };
+      animateOpen();
+    }
+
+    // Room 3 has no traditional door exit — the terminal IS the exit.
+    // Only auto-advance for rooms 1 and 2.
+    if (currentRoomIndex < ROOM_CREATORS.length - 1) {
+      setTimeout(() => {
+        if (!isTransitioning) {
+          goToNextRoom();
+        }
+      }, 2500);
+    }
+  }
+
+  async function goToNextRoom() {
+    isTransitioning = true;
+    currentRoomIndex++;
+
+    if (currentRoomIndex >= ROOM_CREATORS.length) {
+      const elapsed = (Date.now() - gameStartTime) / 1000;
+      ui.showWinScreen(elapsed);
+      return;
+    }
+
+    sceneManager.clearRoom();
+
+    // Re-add hand container to camera
+    if (!sceneManager.camera.children.includes(handContainer)) {
+      sceneManager.camera.add(handContainer);
+    }
+    if (!sceneManager.scene.children.includes(sceneManager.camera)) {
+      sceneManager.scene.add(sceneManager.camera);
+    }
+
+    // Build the new room
+    const newRoomBuilder = new RoomBuilder(sceneManager.scene, sceneManager);
+    currentRoom = ROOM_CREATORS[currentRoomIndex](newRoomBuilder, inventory);
+
+    // Apply room lighting preset
+    if (currentRoom.lightingPreset) {
+      sceneManager.setRoomLighting(currentRoom.lightingPreset);
+    }
+
+    // Show transition overlay
+    await ui.showTransition(
+      `Room ${currentRoomIndex + 1}: ${currentRoom.name || "Unknown"}`,
+      currentRoom.subtitle || ""
+    );
+
+    // Set bounds
+    if (currentRoom.bounds) {
+      sceneManager.setRoomBounds(currentRoom.bounds.x, currentRoom.bounds.z);
+    }
+
+    // Reset camera
+    sceneManager.resetCamera();
+    ui.setActiveRoom(currentRoomIndex);
+
+    // ARIA intro for each room
+    if (currentRoomIndex === 1) {
+      ui.ariaSpeak("Cognitive assessment phase. Your pattern recognition will be tested. Do try to keep up, Doctor.");
+    } else if (currentRoomIndex === 2) {
+      ui.ariaSpeak("Welcome to the Core, Doctor Mercer. This is where it ends — one way or another.");
+    }
+
+    isTransitioning = false;
   }
 
   // ---- 7. Main Render Loop (The Heart of the App) ----
@@ -933,6 +1051,12 @@ async function init() {
       const side = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0,1,0)).normalize();
       sceneManager.camera.position.addScaledVector(fwd, latestJoystick.y * JOYSTICK_MOVE_SPEED);
       sceneManager.camera.position.addScaledVector(side, latestJoystick.x * JOYSTICK_MOVE_SPEED);
+      
+      // Clamp to room bounds (same as WASD movement)
+      const b = sceneManager.roomBounds;
+      sceneManager.camera.position.x = Math.max(-b.x, Math.min(b.x, sceneManager.camera.position.x));
+      sceneManager.camera.position.z = Math.max(-b.z, Math.min(b.z, sceneManager.camera.position.z));
+      
       _bobPhase += dt * BOB_SPEED;
     } else { _bobPhase *= 0.92; }
 
@@ -960,7 +1084,7 @@ async function init() {
             pickupAnimator.playPickup(handContainer, obj, sceneManager.camera).then(() => currentRoom.handleGrab(obj, addToInventory, m => ui.showMessage(m)));
             interactCooldown = 2.0;
           } else if (obj.userData.interactive) {
-            pickupAnimator.playPress(handContainer, obj, sceneManager.camera).then(() => currentRoom.handleInteraction(obj, null, addToInventory, (t,tx) => ui.showClue(t,tx), m => ui.showMessage(m), d => {}, ui));
+            pickupAnimator.playPress(handContainer, obj, sceneManager.camera).then(() => currentRoom.handleInteraction(obj, null, addToInventory, (t,tx) => ui.showClue(t,tx), m => ui.showMessage(m), unlockDoor, ui));
             interactCooldown = 1.5;
           }
         }
@@ -980,7 +1104,54 @@ async function init() {
   });
 
   sceneManager.start();
+  dataSource.start();
   ui.hideLoading();
+
+  // ARIA intro dialogue
+  setTimeout(() => {
+    ui.ariaSpeak("Good morning, Doctor Mercer. Welcome to Prometheus Labs. Your calibration begins now.");
+  }, 1500);
+
+  // Play again handler
+  ui.onPlayAgain(() => {
+    currentRoomIndex = 0;
+    inventory.clear();
+    ui.clearInventory();
+    gameStartTime = Date.now();
+    ui.setGameStartTime(gameStartTime);
+    isTransitioning = false;
+    interactCooldown = 0;
+    pickupAnimator.cancel();
+
+    sceneManager.clearRoom();
+    if (!sceneManager.camera.children.includes(handContainer)) {
+      sceneManager.camera.add(handContainer);
+    }
+    if (!sceneManager.scene.children.includes(sceneManager.camera)) {
+      sceneManager.scene.add(sceneManager.camera);
+    }
+
+    const rb = new RoomBuilder(sceneManager.scene, sceneManager);
+    currentRoom = createRoom1(rb, inventory);
+
+    if (currentRoom.lightingPreset) {
+      sceneManager.setRoomLighting(currentRoom.lightingPreset);
+    }
+
+    ui.setActiveRoom(0);
+    sceneManager.setRoomBounds(
+      currentRoom.bounds ? currentRoom.bounds.x : 2.5,
+      currentRoom.bounds ? currentRoom.bounds.z : 2.5
+    );
+    sceneManager.resetCamera();
+
+    const winScreen = document.getElementById("win-screen");
+    if (winScreen) winScreen.classList.add("hidden");
+
+    setTimeout(() => {
+      ui.ariaSpeak("Restarting neural calibration sequence. Let us begin again, Doctor Mercer.");
+    }, 500);
+  });
 }
 
 init().catch(console.error);

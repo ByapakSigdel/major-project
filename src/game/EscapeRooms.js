@@ -89,7 +89,7 @@ export function createRoom1(builder, inventory) {
     name: 'Calibration Chamber',
     subtitle: 'Decode the color sequence...',
     lightingPreset: 'calibration',
-    bounds: { x: 3.0, z: 3.0 },
+    bounds: { x: 3.3, z: 3.3 },
     checkSolved: () => state.solved,
 
     handleInteraction: (obj, heldItem, addToInventory, showClue, showMessage, unlockDoor, ui) => {
