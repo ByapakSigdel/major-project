@@ -756,7 +756,7 @@ init().catch((err) => {
 */
 
 /**
- * Game Main Entry Point — Project ECHO Escape Room (High-Performance Hardware Integration)
+ * Game Main Entry Point — Project ECHO Escape Room (Hardware-Only Integration)
  */
 
 import "./style.css";
@@ -764,7 +764,6 @@ import * as THREE from "three";
 import { GameSceneManager } from "./GameSceneManager.js";
 import { createHandModelAsync } from "../rendering/HandModel.js";
 import { SerialManager } from '../data/SerialManager.js'; 
-import { SyntheticDataGenerator } from "../data/SyntheticDataGenerator.js";
 import { HandAnimator } from "../animation/HandAnimator.js";
 import { HandInteraction } from "./HandInteraction.js";
 import { PickupAnimator } from "./PickupAnimator.js";
@@ -777,14 +776,18 @@ const ROOM_CREATORS = [createRoom1, createRoom2, createRoom3];
 const IMU_PITCH_SCALE = 1.5;
 const IMU_YAW_SCALE = 1.5;
 const IMU_ROLL_SCALE = 2.0;
-const IMU_SMOOTHING = 0.15;
+const IMU_SMOOTHING = 0.12;
 const HAND_ANCHOR = new THREE.Vector3(0.25, -0.20, -0.40);
 const HAND_BASE_ROTATION = new THREE.Euler(-15 * (Math.PI / 180), -10 * (Math.PI / 180), 15 * (Math.PI / 180), 'YXZ');
 const RESTING_POSE = { thumb: 0.3, index: 0.2, middle: 0.2, ring: 0.25, pinky: 0.3 };
 const JOYSTICK_MOVE_SPEED = 0.05;
-const JOYSTICK_DEAD_ZONE = 0.005;
+const JOYSTICK_DEAD_ZONE = 0.08;
 const BOB_SPEED = 3.0;
 const SWAY_AMOUNT = 0.015;
+
+// Interaction thresholds - lowered for better detection
+const FIST_THRESHOLD = 0.65;  // Finger bend value to consider "closed"
+const FIST_FINGERS_REQUIRED = 3;  // Number of fingers that need to be closed
 
 
 async function init() {
@@ -811,9 +814,8 @@ async function init() {
   sceneManager.scene.add(sceneManager.camera);
   handContainer.position.copy(HAND_ANCHOR);
 
-  // ---- 3. Systems ----
+  // ---- 3. Systems (Hardware Only - No Synthetic Data) ----
   const serial = new SerialManager(); 
-  const dataSource = new SyntheticDataGenerator({ mode: "random", updateRate: 30, speed: 0.6 });
   const animator = new HandAnimator(bones, 0.15);
   animator.skipWristOrientation = true;
   const interaction = new HandInteraction(sceneManager);
@@ -821,47 +823,35 @@ async function init() {
   const roomBuilder = new RoomBuilder(sceneManager.scene, sceneManager);
   const ui = new GameUI();
   
-  // ---- 4. Data Bridge (Performance Fix) ----
-  let currentHardwareData = null; // Buffer for incoming sensor data
-  let lastHardwareTimestamp = 0;
+  // ---- 4. Hardware Data Handling ----
   let latestFrame = null;
   let latestJoystick = { x: 0, y: 0 };
-
-  // This listener only updates a variable in memory (very fast)
-  serial.onData = (rawData) => {
-    
-    lastHardwareTimestamp = Date.now();
-
-    const hardwareFrame = {
-    fingers: {
-      thumb: rawData.thumb,
-      index: rawData.index,
-      middle: rawData.middle,
-      ring: rawData.ring,
-      pinky: rawData.pinky
-    },
-    orientation: {
-      roll: rawData.roll,
-      pitch: rawData.pitch,
-      yaw: rawData.yaw
-    },
-    // Fix: Match your hardware keys "joyX" and "joyY"
-    joystick: {
-      x: rawData.joyX || 0,
-      y: rawData.joyY || 0
-    }
-  };
-  // Buffer it for the performance-safe loop
-  currentHardwareData = rawData; 
-  processFrame(hardwareFrame);
-
-  };
-
+  let hardwareConnected = false;
   
+  // IMU calibration - stores initial offset to zero out drift
+  let imuCalibration = { roll: 0, pitch: 0, yaw: 0 };
+  let imuCalibrated = false;
+  let calibrationSamples = [];
+  const CALIBRATION_SAMPLES_NEEDED = 30;
 
-  // UI Button
-  const connectBtn = document.getElementById('game-connect-hw');
-  if (connectBtn) connectBtn.addEventListener('click', () => serial.connect());
+  // Helper to ensure finger values are in 0-1 range
+  const normalizeFingerValue = (value) => {
+    if (typeof value !== 'number' || isNaN(value)) return 0.2; // default neutral
+    // If value is already 0-1, use as-is; if it's 0-1023 (ADC), normalize
+    if (value > 1) {
+      return Math.max(0, Math.min(1, value / 1023));
+    }
+    return Math.max(0, Math.min(1, value));
+  };
+
+  // Helper to apply IMU calibration offset
+  const calibrateIMU = (rawRoll, rawPitch, rawYaw) => {
+    return {
+      roll: (rawRoll || 0) - imuCalibration.roll,
+      pitch: (rawPitch || 0) - imuCalibration.pitch,
+      yaw: (rawYaw || 0) - imuCalibration.yaw
+    };
+  };
 
   // ---- 5. Unified Processor ----
   const processFrame = (frame) => {
@@ -871,15 +861,82 @@ async function init() {
     // Grab animation overrides
     if (pickupAnimator.fingerOverride !== null) {
       const o = pickupAnimator.fingerOverride;
-      frame.fingers = { thumb: o, index: o, middle: o, ring: o, pinky: o };
+      frame = { 
+        ...frame, 
+        fingers: { thumb: o, index: o, middle: o, ring: o, pinky: o } 
+      };
     }
     animator.applyFrame(frame);
   };
 
-  // Fallback synthetic data
-  dataSource.onData((frame) => {
-    if (Date.now() - lastHardwareTimestamp > 1000) processFrame(frame);
-  });
+  // Hardware data listener
+  serial.onData = (rawData) => {
+    hardwareConnected = true;
+    
+    // Normalize finger values
+    const fingers = {
+      thumb: normalizeFingerValue(rawData.thumb),
+      index: normalizeFingerValue(rawData.index),
+      middle: normalizeFingerValue(rawData.middle),
+      ring: normalizeFingerValue(rawData.ring),
+      pinky: normalizeFingerValue(rawData.pinky)
+    };
+
+    // IMU auto-calibration on first samples
+    if (!imuCalibrated && calibrationSamples.length < CALIBRATION_SAMPLES_NEEDED) {
+      calibrationSamples.push({
+        roll: rawData.roll || 0,
+        pitch: rawData.pitch || 0,
+        yaw: rawData.yaw || 0
+      });
+      
+      if (calibrationSamples.length === CALIBRATION_SAMPLES_NEEDED) {
+        // Average the samples to get calibration offset
+        imuCalibration.roll = calibrationSamples.reduce((sum, s) => sum + s.roll, 0) / CALIBRATION_SAMPLES_NEEDED;
+        imuCalibration.pitch = calibrationSamples.reduce((sum, s) => sum + s.pitch, 0) / CALIBRATION_SAMPLES_NEEDED;
+        imuCalibration.yaw = calibrationSamples.reduce((sum, s) => sum + s.yaw, 0) / CALIBRATION_SAMPLES_NEEDED;
+        imuCalibrated = true;
+        console.log('IMU calibrated:', imuCalibration);
+        ui.showMessage('IMU Calibrated - Ready to play!');
+      }
+    }
+
+    // Apply IMU calibration
+    const orientation = calibrateIMU(rawData.roll, rawData.pitch, rawData.yaw);
+
+    // Joystick with dead zone applied
+    let joyX = rawData.joyX || 0;
+    let joyY = rawData.joyY || 0;
+    if (Math.abs(joyX) < JOYSTICK_DEAD_ZONE) joyX = 0;
+    if (Math.abs(joyY) < JOYSTICK_DEAD_ZONE) joyY = 0;
+
+    const hardwareFrame = {
+      fingers,
+      orientation,
+      joystick: { x: joyX, y: joyY }
+    };
+
+    processFrame(hardwareFrame);
+  };
+
+  // UI Button for hardware connection
+  const connectBtn = document.getElementById('game-connect-hw');
+  if (connectBtn) {
+    connectBtn.addEventListener('click', () => {
+      serial.connect();
+      ui.showMessage('Connecting to hardware...');
+    });
+  }
+
+  // Manual IMU recalibration function (can be triggered by button)
+  const recalibrateIMU = () => {
+    imuCalibrated = false;
+    calibrationSamples = [];
+    ui.showMessage('Recalibrating IMU... Hold hand still');
+  };
+  
+  // Expose recalibration to window for debug
+  window.recalibrateIMU = recalibrateIMU;
 
   // ---- 6. Game Logic Functions ----
   let inventory = new Set();
@@ -1018,78 +1075,102 @@ async function init() {
   
 
   sceneManager.onUpdate((dt) => {
-    // A. Check for hardware data once per frame (Prevent Hanging)
-    if (currentHardwareData) {
-      const d = currentHardwareData; // This is the raw JSON from your sensor
-      
-      processFrame({
-        fingers: { 
-          thumb: d.thumb, index: d.index, middle: d.middle, ring: d.ring, pinky: d.pinky 
-        },
-        orientation: { 
-          roll: d.roll, pitch: d.pitch, yaw: d.yaw 
-        },
-        // FIX: Mapping the flat hardware keys to the game's joystick object
-        joystick: { 
-          x: d.joyX || 0, 
-          y: -(d.joyY || 0) 
-        }
-      });
-      
-      currentHardwareData = null;
-    }
-    
-
+    // Update animator
     animator.update(dt);
     
+    // Camera movement via WASD
     sceneManager.moveCamera(dt);
 
-    // B. Locomotion
-    const moveMag = Math.sqrt(latestJoystick.x**2 + latestJoystick.y**2);
-    if (moveMag > JOYSTICK_DEAD_ZONE) {
-      const fwd = new THREE.Vector3(); sceneManager.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
-      const side = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0,1,0)).normalize();
-      sceneManager.camera.position.addScaledVector(fwd, latestJoystick.y * JOYSTICK_MOVE_SPEED);
-      sceneManager.camera.position.addScaledVector(side, latestJoystick.x * JOYSTICK_MOVE_SPEED);
-      
-      // Clamp to room bounds (same as WASD movement)
-      const b = sceneManager.roomBounds;
-      sceneManager.camera.position.x = Math.max(-b.x, Math.min(b.x, sceneManager.camera.position.x));
-      sceneManager.camera.position.z = Math.max(-b.z, Math.min(b.z, sceneManager.camera.position.z));
-      
-      _bobPhase += dt * BOB_SPEED;
-    } else { _bobPhase *= 0.92; }
+    // A. Joystick Locomotion (hardware joystick)
+    if (latestFrame && hardwareConnected) {
+      const moveMag = Math.sqrt(latestJoystick.x**2 + latestJoystick.y**2);
+      if (moveMag > JOYSTICK_DEAD_ZONE) {
+        const fwd = new THREE.Vector3(); 
+        sceneManager.camera.getWorldDirection(fwd); 
+        fwd.y = 0; 
+        fwd.normalize();
+        const side = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0,1,0)).normalize();
+        
+        // Note: joystick Y is typically forward/back
+        sceneManager.camera.position.addScaledVector(fwd, -latestJoystick.y * JOYSTICK_MOVE_SPEED);
+        sceneManager.camera.position.addScaledVector(side, latestJoystick.x * JOYSTICK_MOVE_SPEED);
+        
+        // Clamp to room bounds
+        const b = sceneManager.roomBounds;
+        sceneManager.camera.position.x = Math.max(-b.x, Math.min(b.x, sceneManager.camera.position.x));
+        sceneManager.camera.position.z = Math.max(-b.z, Math.min(b.z, sceneManager.camera.position.z));
+        
+        _bobPhase += dt * BOB_SPEED;
+      } else { 
+        _bobPhase *= 0.92; 
+      }
+    }
 
-    // C. IMU Smoothing & Rotation
+    // B. IMU Smoothing & Hand Rotation
     handContainer.quaternion.copy(_baseQuat);
-    if (latestFrame?.orientation) {
+    if (latestFrame?.orientation && imuCalibrated) {
       const ori = latestFrame.orientation;
+      
+      // Smooth the IMU values
       _smoothedIMU.roll += (ori.roll - _smoothedIMU.roll) * IMU_SMOOTHING;
       _smoothedIMU.pitch += (ori.pitch - _smoothedIMU.pitch) * IMU_SMOOTHING;
       _smoothedIMU.yaw += (ori.yaw - _smoothedIMU.yaw) * IMU_SMOOTHING;
-      _imuEuler.set(_smoothedIMU.pitch * 1.5 * (Math.PI/180), _smoothedIMU.yaw * 1.5 * (Math.PI/180), _smoothedIMU.roll * 2.0 * (Math.PI/180), 'YXZ');
+      
+      // Apply rotation with clamping to prevent wild swings
+      const clampedRoll = Math.max(-45, Math.min(45, _smoothedIMU.roll));
+      const clampedPitch = Math.max(-45, Math.min(45, _smoothedIMU.pitch));
+      const clampedYaw = Math.max(-60, Math.min(60, _smoothedIMU.yaw));
+      
+      _imuEuler.set(
+        clampedPitch * IMU_PITCH_SCALE * (Math.PI/180), 
+        clampedYaw * IMU_YAW_SCALE * (Math.PI/180), 
+        clampedRoll * IMU_ROLL_SCALE * (Math.PI/180), 
+        'YXZ'
+      );
       handContainer.quaternion.multiply(new THREE.Quaternion().setFromEuler(_imuEuler));
     }
 
-    handContainer.position.set(HAND_ANCHOR.x + (Math.cos(_bobPhase*0.5)*SWAY_AMOUNT), HAND_ANCHOR.y + (Math.sin(_bobPhase)*SWAY_AMOUNT), HAND_ANCHOR.z);
+    // C. Hand Position with sway
+    handContainer.position.set(
+      HAND_ANCHOR.x + (Math.cos(_bobPhase*0.5)*SWAY_AMOUNT), 
+      HAND_ANCHOR.y + (Math.sin(_bobPhase)*SWAY_AMOUNT), 
+      HAND_ANCHOR.z
+    );
 
-    // D. Interaction Check (Hand Closing)
-    if (latestFrame && interactCooldown <= 0 && !pickupAnimator.isAnimating) {
+    // D. Interaction Check (Fist Detection from Flex Sensors)
+    if (latestFrame && latestFrame.fingers && interactCooldown <= 0 && !pickupAnimator.isAnimating && hardwareConnected) {
       const f = latestFrame.fingers;
-      if (f.index > 0.75 && f.middle > 0.75) { // Fist detected
+      
+      // Count how many fingers are closed (bent)
+      let closedCount = 0;
+      if (f.thumb >= FIST_THRESHOLD) closedCount++;
+      if (f.index >= FIST_THRESHOLD) closedCount++;
+      if (f.middle >= FIST_THRESHOLD) closedCount++;
+      if (f.ring >= FIST_THRESHOLD) closedCount++;
+      if (f.pinky >= FIST_THRESHOLD) closedCount++;
+      
+      // Fist detected when enough fingers are closed
+      if (closedCount >= FIST_FINGERS_REQUIRED) {
         const target = sceneManager.getTargetObject();
-        if (target && target.distance < 3) {
+        if (target && target.distance < 3.5) {  // Slightly increased interaction distance
           const obj = target.object;
+          
           if (obj.userData.grabbable) {
-            pickupAnimator.playPickup(handContainer, obj, sceneManager.camera).then(() => currentRoom.handleGrab(obj, addToInventory, m => ui.showMessage(m)));
+            pickupAnimator.playPickup(handContainer, obj, sceneManager.camera).then(() => {
+              currentRoom.handleGrab(obj, addToInventory, m => ui.showMessage(m));
+            });
             interactCooldown = 2.0;
+            ui.showMessage('Grabbed: ' + (obj.userData.displayName || 'item'));
           } else if (obj.userData.interactive) {
-            pickupAnimator.playPress(handContainer, obj, sceneManager.camera).then(() => currentRoom.handleInteraction(obj, null, addToInventory, (t,tx) => ui.showClue(t,tx), m => ui.showMessage(m), unlockDoor, ui));
+            pickupAnimator.playPress(handContainer, obj, sceneManager.camera).then(() => {
+              currentRoom.handleInteraction(obj, null, addToInventory, (t,tx) => ui.showClue(t,tx), m => ui.showMessage(m), unlockDoor, ui);
+            });
             interactCooldown = 1.5;
           }
         }
       }
     }
+    
     if (interactCooldown > 0) interactCooldown -= dt;
   });
 
@@ -1099,17 +1180,27 @@ async function init() {
     debugAccum += dt;
     if (debugAccum >= 1 / 15) { // Only update UI 15 times a second
       ui.updateDebug(animator.currentState, sceneManager.fps);
+      
+      // Show connection status
+      const statusEl = document.getElementById('hw-status');
+      if (statusEl) {
+        statusEl.textContent = hardwareConnected ? 'Hardware Connected' : 'Waiting for Hardware...';
+        statusEl.style.color = hardwareConnected ? '#4ade80' : '#fbbf24';
+      }
+      
       debugAccum = 0;
     }
   });
 
   sceneManager.start();
-  dataSource.start();
   ui.hideLoading();
+  
+  // Show waiting for hardware message
+  ui.showMessage('Connect hardware to start playing');
 
-  // ARIA intro dialogue
+  // ARIA intro dialogue (delayed)
   setTimeout(() => {
-    ui.ariaSpeak("Good morning, Doctor Mercer. Welcome to Prometheus Labs. Your calibration begins now.");
+    ui.ariaSpeak("Good morning, Doctor Mercer. Connect your neural interface to begin calibration.");
   }, 1500);
 
   // Play again handler
@@ -1122,6 +1213,9 @@ async function init() {
     isTransitioning = false;
     interactCooldown = 0;
     pickupAnimator.cancel();
+    
+    // Reset IMU calibration for fresh start
+    recalibrateIMU();
 
     sceneManager.clearRoom();
     if (!sceneManager.camera.children.includes(handContainer)) {
